@@ -60,6 +60,7 @@
             <button class="auto-tab active" data-view="dashboard">📊 Dashboard</button>
             <button class="auto-tab" data-view="builder">🔧 Workflow Builder</button>
             <button class="auto-tab" data-view="audio-library">🎵 Sound Library</button>
+            <button class="auto-tab" data-view="free-ai">🆓 Free AI</button>
             <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
                 <!-- ComfyUI Live Status Badge -->
                 <div id="comfyui-badge" onclick="window.open('https://github.com/comfyanonymous/ComfyUI', '_blank')" style="
@@ -508,6 +509,44 @@
             </div>
         </div><!-- /view-audio-library -->
 
+        <div class="auto-view hidden" id="view-free-ai">
+            <div style="max-width: 1200px; margin: 0 auto; padding: 1.5rem;">
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 1rem;">
+                    <h2 style="color: #fff; font-size: 1.4rem; font-weight: 700;">🆓 Free AI — Background Agent</h2>
+                    <span id="freeAgentBadge" style="font-size: 0.8rem; padding: 4px 12px; border-radius: 20px; background: rgba(255,255,255,0.08); color: #94a3b8;">checking…</span>
+                    <button id="freeRefreshBtn" style="margin-left: auto; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); color: #fff; padding: 7px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">↻ Refresh</button>
+                </div>
+                <p style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 1.5rem;">
+                    The invisible background agent drives free website tiers (ChatGPT Go, Gemini, Veo…) instead of paid APIs.
+                    Start it on your PC with <code style="background: rgba(255,255,255,0.08); padding: 2px 8px; border-radius: 6px;">start_agent.bat</code>
+                    — it runs with no window. Balances update automatically after each job.
+                </p>
+
+                <h3 style="color: #fff; font-size: 1.05rem; margin: 1.5rem 0 0.75rem;">Providers &amp; credit ledger</h3>
+                <div id="freeProvidersTable" style="overflow-x: auto;"></div>
+
+                <h3 style="color: #fff; font-size: 1.05rem; margin: 1.5rem 0 0.75rem;">Scout candidates
+                    <button id="freeScoutBtn" style="margin-left: 10px; background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.4); color: #4ade80; padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600;">🔍 Run scout now</button>
+                </h3>
+                <div id="freeCandidatesTable" style="overflow-x: auto;"></div>
+
+                <h3 style="color: #fff; font-size: 1.05rem; margin: 1.5rem 0 0.75rem;">Manual job</h3>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 1rem;">
+                    <select id="freeJobKind" style="background: #0b0f19; color: #fff; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 8px 12px;">
+                        <option value="image">🖼 image</option>
+                        <option value="video">🎬 video</option>
+                        <option value="text">📝 text</option>
+                    </select>
+                    <input id="freeJobPrompt" placeholder="Prompt…" style="flex: 1; min-width: 220px; background: #0b0f19; color: #fff; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 8px 12px;">
+                    <button id="freeJobBtn" style="background: rgba(59,130,246,0.2); border: 1px solid rgba(59,130,246,0.5); color: #93c5fd; padding: 8px 18px; border-radius: 8px; cursor: pointer; font-weight: 600;">▶ Enqueue</button>
+                    <span id="freeJobMsg" style="color: #94a3b8; font-size: 0.8rem;"></span>
+                </div>
+
+                <h3 style="color: #fff; font-size: 1.05rem; margin: 1.5rem 0 0.75rem;">Job queue</h3>
+                <div id="freeJobsTable" style="overflow-x: auto;"></div>
+            </div>
+        </div><!-- /view-free-ai -->
+
     </div><!-- /auto-shell -->
 
     <!-- Context Menu -->
@@ -926,6 +965,7 @@
         window.PF = { userRole: '{{ user_role }}', userName: '{{ user_name }}' };
     </script>
     <script src="{{ url_for('static', filename='automation.js') }}"></script>
+    <script src="{{ url_for('static', filename='free_ai.js') }}"></script>
     <script src="{{ url_for('static', filename='agam.js') }}"></script>
 </body>
 </html>

@@ -60,8 +60,14 @@ def _cover_resize(img, w, h):
 
 
 def generate_thumbnail(title, hook="", scene_images=None, style="Bold Viral",
-                        custom_text="", output_filename="thumbnail.png"):
-    """Build a 1280x720 YouTube thumbnail. Returns the saved path."""
+                        custom_text="", output_filename="thumbnail.png",
+                        base_image_model=None):
+    """Build a 1280x720 YouTube thumbnail. Returns the saved path.
+
+    base_image_model: when no scene image exists, which engine paints the
+    background art. Pass "free-web" / "free-web:<provider_id>" to use the
+    invisible background agent (ChatGPT Go / Gemini web, $0).
+    """
     from PIL import Image, ImageDraw, ImageFont
 
     text = _shorten_title(custom_text or hook or title)
@@ -81,7 +87,6 @@ def generate_thumbnail(title, hook="", scene_images=None, style="Bold Viral",
     else:
         print("[thumbnail] No scene image — generating dedicated thumbnail art...")
         try:
-            from .image_gen import _generate_image_once
             prompt = (
                 f"Cinematic YouTube thumbnail background for '{title}'. "
                 "Dramatic, ultra-detailed, high contrast, vibrant colors, "
@@ -90,9 +95,18 @@ def generate_thumbnail(title, hook="", scene_images=None, style="Bold Viral",
             )
             gen_path = os.path.join(OUTPUT_DIR, "_thumb_base.png")
             os.makedirs(OUTPUT_DIR, exist_ok=True)
-            got = _generate_image_once(prompt, gen_path, width=1280, height=720,
-                                       model_name="Pollinations FLUX", seed=7)
-            img = Image.open(got or gen_path).convert("RGB")
+            if base_image_model and str(base_image_model).lower().startswith("free-web"):
+                from .free_agent_client import generate_image_file
+                prefer = (str(base_image_model).split(":", 1)[1].strip()
+                          if ":" in str(base_image_model) else None)
+                print(f"[thumbnail] base art via free-web agent (prefer={prefer or 'auto'})")
+                got = generate_image_file(prompt, provider_id=prefer)
+                img = Image.open(got).convert("RGB")
+            else:
+                from .image_gen import _generate_image_once
+                got = _generate_image_once(prompt, gen_path, width=1280, height=720,
+                                           model_name="Pollinations FLUX", seed=7)
+                img = Image.open(got or gen_path).convert("RGB")
         except Exception as e:
             print(f"[thumbnail] Generation failed ({e}) — using gradient fallback.")
             from PIL import Image as _I

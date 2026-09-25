@@ -50,6 +50,13 @@ app.secret_key = 'pulseforge-change-this-in-production-xK9mQ2pL'
 # ── Initialize Database immediately (creates tables + seeds admin) ─────────
 database.init_db()
 
+# ── Seed built-in free-web providers (ChatGPT Go, Gemini web, Veo web) ─────
+try:
+    from src.backend import free_providers as _fp_seed
+    _fp_seed.seed_builtin_providers()
+except Exception as _e:
+    print(f"[Startup] free provider seeding notice: {_e}", flush=True)
+
 # ── Flask-Login ────────────────────────────────────────────────────────────
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -811,6 +818,137 @@ def api_clips_status(job_id):
     if not job:
         return jsonify({"status": "error", "message": "Unknown job id."}), 404
     return jsonify({"status": "success", "job": job})
+
+
+# ── Free-web background agent: providers, candidates, jobs ─────────────────
+@app.route('/api/free/providers', methods=['GET'])
+@login_required
+def api_free_providers():
+    from src.backend import free_providers as fp
+    return jsonify({"status": "success", "providers": fp.list_providers()})
+
+
+@app.route('/api/free/providers', methods=['POST'])
+@login_required
+def api_free_provider_add():
+    from src.backend import free_providers as fp
+    data = request.get_json() or {}
+    if not data.get("id") or not data.get("name") or not data.get("url"):
+        return jsonify({"status": "error",
+                        "message": "Fields required: id, name, url."}), 400
+    p = fp.upsert_provider(
+        data["id"], data["name"], data["url"],
+        kinds=data.get("kinds") or ["image"],
+        quota_total=data.get("quota_total"),
+        balance=data.get("balance"),
+        balance_recipe=data.get("balance_recipe") or {},
+        priority=int(data.get("priority", 10)),
+        notes=data.get("notes", ""),
+        enabled=bool(data.get("enabled", True)))
+    return jsonify({"status": "success", "provider": p})
+
+
+@app.route('/api/free/providers/<pid>', methods=['PUT'])
+@login_required
+def api_free_provider_update(pid):
+    from src.backend import free_providers as fp
+    data = request.get_json() or {}
+    p = fp.update_provider(pid, **data)
+    if not p:
+        return jsonify({"status": "error", "message": "Unknown provider."}), 404
+    return jsonify({"status": "success", "provider": p})
+
+
+@app.route('/api/free/providers/<pid>', methods=['DELETE'])
+@login_required
+def api_free_provider_delete(pid):
+    from src.backend import free_providers as fp
+    if not fp.delete_provider(pid):
+        return jsonify({"status": "error", "message": "Unknown provider."}), 404
+    return jsonify({"status": "success", "deleted": pid})
+
+
+@app.route('/api/free/candidates', methods=['GET'])
+@login_required
+def api_free_candidates():
+    from src.backend import free_providers as fp
+    status = request.args.get("status", "pending")
+    return jsonify({"status": "success",
+                    "candidates": fp.list_candidates(status)})
+
+
+@app.route('/api/free/candidates/<int:cid>/approve', methods=['POST'])
+@login_required
+def api_free_candidate_approve(cid):
+    from src.backend import free_providers as fp
+    data = request.get_json() or {}
+    p = fp.approve_candidate(cid, provider_id=data.get("provider_id"),
+                             balance_recipe=data.get("balance_recipe"))
+    if not p:
+        return jsonify({"status": "error", "message": "Unknown candidate."}), 404
+    return jsonify({"status": "success", "provider": p})
+
+
+@app.route('/api/free/candidates/<int:cid>/reject', methods=['POST'])
+@login_required
+def api_free_candidate_reject(cid):
+    from src.backend import free_providers as fp
+    if not fp.reject_candidate(cid):
+        return jsonify({"status": "error", "message": "Unknown candidate."}), 404
+    return jsonify({"status": "success", "rejected": cid})
+
+
+@app.route('/api/free/jobs', methods=['GET'])
+@login_required
+def api_free_jobs():
+    from src.agent import queue as jq
+    from src.backend import free_agent_client as fac
+    return jsonify({"status": "success",
+                    "agent_alive": fac.agent_alive(),
+                    "stats": jq.queue_stats(),
+                    "jobs": jq.list_jobs(request.args.get("status"),
+                                         int(request.args.get("limit", 50)))})
+
+
+@app.route('/api/free/jobs', methods=['POST'])
+@login_required
+def api_free_job_enqueue():
+    from src.agent import queue as jq
+    from src.backend import free_agent_client as fac
+    data = request.get_json() or {}
+    kind = (data.get("kind") or "image").strip()
+    if kind not in ("text", "image", "video"):
+        return jsonify({"status": "error",
+                        "message": "kind must be text, image or video."}), 400
+    try:
+        job_id, provider = fac.enqueue(kind, data.get("prompt", ""),
+                                       data.get("input_path"),
+                                       data.get("provider_id"))
+    except fac.FreeAgentError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+    return jsonify({"status": "success", "job_id": job_id,
+                    "provider": provider["id"], "job": jq.get_job(job_id)})
+
+
+@app.route('/api/free/jobs/<job_id>', methods=['GET'])
+@login_required
+def api_free_job_status(job_id):
+    from src.agent import queue as jq
+    job = jq.get_job(job_id)
+    if not job:
+        return jsonify({"status": "error", "message": "Unknown job id."}), 404
+    return jsonify({"status": "success", "job": job})
+
+
+@app.route('/api/free/scout/run', methods=['POST'])
+@login_required
+def api_free_scout_run():
+    from src.agent import scout
+    try:
+        result = scout.run_scout()
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    return jsonify({"status": "success", **result})
 
 
 @app.route('/api/repurpose/export', methods=['POST'])

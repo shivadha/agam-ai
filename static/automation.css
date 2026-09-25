@@ -579,8 +579,12 @@
     display: flex;
     align-items: center;
     gap: 0.45rem;
-    flex-shrink: 1;
-    min-width: 0;
+    /* Never shrink: on narrow viewports the toolbar scrolls horizontally
+       (overflow-x:auto) instead of crushing this group, which used to make
+       the status pills' text overflow visibly and paint over the right-side
+       buttons (Free AI badge vs Admin Sync pill overlap). */
+    flex-shrink: 0;
+    min-width: max-content;
 }
 .wf-name-wrap {
     display: flex; align-items: center; gap: 0.35rem;

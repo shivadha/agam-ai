@@ -213,7 +213,24 @@ class WorkflowEngine:
 
             elif node_type == 'gen-desc':
                 topic = self._find_in_state('topic_title') or self._find_in_state('topic') or 'PulseForge Video'
-                desc = self._find_in_state('description') or f"Breaking breakdown of {topic}. Watch till the end to discover what happened next! #Shorts #Trending"
+                desc = self._find_in_state('description')
+                desc_model = str(node_data.get('model', '') or '')
+                # Free-web background agent (ChatGPT Go, $0) for AI-written
+                # descriptions: set the node's model to "free-web".
+                if not desc and desc_model.lower().startswith("free-web"):
+                    from src.backend.free_agent_client import generate_text
+                    prefer = (desc_model.split(":", 1)[1].strip()
+                              if ":" in desc_model else None)
+                    title = self._find_in_state('title') or topic
+                    script = (self._find_in_state('script') or '')[:1500]
+                    desc = generate_text(
+                        f"Write a punchy YouTube Shorts description (2-3 sentences + "
+                        f"5 hashtags) for a video titled '{title}'. "
+                        f"Script context: {script}\n(Reply with only the description.)",
+                        provider_id=prefer)
+                    print(f"[Orchestrator] gen-desc via free-web agent: {len(desc)} chars")
+                if not desc:
+                    desc = f"Breaking breakdown of {topic}. Watch till the end to discover what happened next! #Shorts #Trending"
                 result = {"status": "success", "node_type": node_type, "description": desc}
 
             elif node_type == 'gen-tags':
@@ -303,13 +320,30 @@ class WorkflowEngine:
                 custom_api_key = node_data.get('api_key', '')
                 visual_style = node_data.get('visual_style') or self._find_in_state('visual_style') or 'cinema_8k'
                 output_dir = OUTPUT_DIR
-                
-                updated_scenes = generate_images_for_scenes(
-                    scenes, output_dir,
-                    model_name=image_model,
-                    custom_api_key=custom_api_key,
-                    visual_style=visual_style
-                )
+
+                # ── Free-web background agent (Gemini web etc., $0) ──
+                # Set the node's model to "free-web" or "free-web:<provider_id>".
+                if str(image_model).lower().startswith("free-web"):
+                    from src.backend.free_agent_client import generate_image_file
+                    prefer = (str(image_model).split(":", 1)[1].strip()
+                              if ":" in str(image_model) else None)
+                    print(f"[Orchestrator] image-gen via free-web agent (prefer={prefer or 'auto'})")
+                    for i, scene in enumerate(scenes):
+                        prompt = (scene.get('image_prompt')
+                                  or (scene.get('image_prompts') or [None])[0]
+                                  or scene.get('narration')
+                                  or f"Cinematic photorealistic 8k vertical shot, scene {i + 1}")
+                        img_path = generate_image_file(prompt, provider_id=prefer)
+                        scene.setdefault('image_paths', []).append(img_path)
+                        print(f"[Orchestrator] scene {i + 1}: free-web image -> {os.path.basename(img_path)}")
+                    updated_scenes = scenes
+                else:
+                    updated_scenes = generate_images_for_scenes(
+                        scenes, output_dir,
+                        model_name=image_model,
+                        custom_api_key=custom_api_key,
+                        visual_style=visual_style
+                    )
                 
                 result = {
                     "status": "success",
@@ -327,14 +361,34 @@ class WorkflowEngine:
                 provider = node_data.get('provider', 'ComfyUI (Local Wan / SVD - Free)')
                 api_key = node_data.get('api_key', '')
                 output_dir = OUTPUT_DIR
-                
+
                 print(f"[Orchestrator] Processing AI Image-to-Video generation using provider: {provider}")
-                updated_scenes = generate_videos_for_scenes(
-                    scenes=scenes,
-                    output_dir=output_dir,
-                    provider=provider,
-                    api_key=api_key
-                )
+
+                # ── Free-web background agent (Veo free tier etc., $0) ──
+                # Set the node's provider to "free-web" or "free-web:<provider_id>".
+                if str(provider).lower().startswith("free-web"):
+                    from src.backend.free_agent_client import generate_video_file
+                    prefer = (str(provider).split(":", 1)[1].strip()
+                              if ":" in str(provider) else None)
+                    print(f"[Orchestrator] img-to-video via free-web agent (prefer={prefer or 'auto'})")
+                    for i, scene in enumerate(scenes):
+                        img = (scene.get('image_paths') or [None])[0] or scene.get('image_path')
+                        prompt = (scene.get('image_to_video_prompt')
+                                  or scene.get('video_prompt')
+                                  or scene.get('narration')
+                                  or "cinematic slow push-in, photorealistic")
+                        v_path = generate_video_file(prompt, input_path=img,
+                                                     provider_id=prefer)
+                        scene.setdefault('video_paths', []).append(v_path)
+                        print(f"[Orchestrator] scene {i + 1}: free-web video -> {os.path.basename(v_path)}")
+                    updated_scenes = scenes
+                else:
+                    updated_scenes = generate_videos_for_scenes(
+                        scenes=scenes,
+                        output_dir=output_dir,
+                        provider=provider,
+                        api_key=api_key
+                    )
                             
                 result = {
                     "status": "success",
@@ -411,7 +465,8 @@ class WorkflowEngine:
                 thumb_path = generate_thumbnail(
                     title=title, hook=hook, scene_images=scene_images,
                     style=style, custom_text=custom_text,
-                    output_filename=f"thumbnail_{node_id}.png"
+                    output_filename=f"thumbnail_{node_id}.png",
+                    base_image_model=node_data.get('base_image_model', ''),
                 )
                 result = {
                     "status": "success",
