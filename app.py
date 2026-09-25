@@ -1540,6 +1540,14 @@ def api_agam_skills_delete(skill_id):
 # ── Entrypoint ─────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     print("Starting PulseForge -- AI & Trend Intelligence Platform", flush=True)
+    # ── Auto-start local AI services (ComfyUI, Ollama) if not already running ──
+    try:
+        from src.backend.local_services import ensure_local_services
+        print("[Startup] Ensuring local AI services are running...", flush=True)
+        ensure_local_services()
+    except Exception as _e:
+        print(f"[Startup] Local services auto-start notice: {_e}", flush=True)
+
     try:
         from src.backend.video_editing_learner import init_editing_db
         print("[Startup] Initializing video editing learner DB...", flush=True)
