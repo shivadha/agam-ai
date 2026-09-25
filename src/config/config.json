@@ -1,0 +1,14 @@
+{
+  "telegram": {
+    "bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
+    "chat_id": "YOUR_TELEGRAM_CHAT_ID"
+  },
+  "scheduler": {
+    "interval_minutes": 5
+  },
+  "hn_rss_feeds": {
+    "AI Releases": "https://hnrss.org/newest?q=AI+release+OR+LLM+release+OR+model+weights",
+    "AI Tools": "https://hnrss.org/newest?q=Show+HN+AI+OR+Show+HN+ML",
+    "Agent Tech": "https://hnrss.org/newest?q=AI+agent+OR+autonomous+agent"
+  }
+}

@@ -1,0 +1,39 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables & Private secrets (CRITICAL)
+.env
+.env.*
+client_secret.json
+*.pem
+*.key
+
+# Local databases & run outputs
+*.db
+*.sqlite3
+output/
+downloads/
+temp/
+
+# Large models & external checkouts
+ComfyUI/
+models/
+*.ckpt
+*.safetensors
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE & Editor settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log

@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Automation Builder — PulseForge</title>
+    <meta name="description" content="Visual drag-and-drop workflow automation builder for YouTube content creation.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='automation.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='agam.css') }}">
+</head>
+<body>
+    <div class="bg-orb bg-orb-1"></div>
+    <div class="bg-orb bg-orb-2"></div>
+    <div class="bg-orb bg-orb-3"></div>
+
+    <!-- ── NAVBAR ── -->
+    <nav class="navbar" id="navbar">
+        <div class="nav-inner">
+            <div class="nav-brand">
+                <span class="brand-icon">⚡</span>
+                <span class="brand-text">PulseForge</span>
+                <span class="brand-badge">LIVE</span>
+            </div>
+            <div class="nav-page-tabs">
+                <a href="/" class="nav-page-tab">📰 News Feed</a>
+                <a href="/#viral" class="nav-page-tab">🔥 Viral Hits</a>
+                <a href="/automation" class="nav-page-tab active">⚙️ Automation</a>
+            </div>
+            <div class="nav-actions">
+                <!-- Say Agam AI Voice Assistant Trigger -->
+                <button class="nav-btn-agam" id="navSayAgamBtn" title="Say 'Agam' or Click to talk with AI Assistant">
+                    <span class="nav-agam-reactor-icon">
+                        <span class="nav-agam-core"></span>
+                    </span>
+                    <span class="nav-agam-label">🎙️ Say "Agam"</span>
+                    <span class="nav-agam-badge">AI</span>
+                </button>
+
+                <div class="user-chip">
+                    <div class="user-avatar">{{ user_name[0]|upper }}</div>
+                    <div class="user-info">
+                        <span class="user-name">{{ user_name }}</span>
+                        <span class="user-role">{{ user_role }}</span>
+                    </div>
+                    <a href="/logout" class="logout-btn" title="Sign out">↩</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ── APP SHELL ── -->
+    <div class="auto-shell">
+
+        <!-- Sub-navigation -->
+        <div class="auto-subnav">
+            <button class="auto-tab active" data-view="dashboard">📊 Dashboard</button>
+            <button class="auto-tab" data-view="builder">🔧 Workflow Builder</button>
+            <button class="auto-tab" data-view="audio-library">🎵 Sound Library</button>
+            <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+                <!-- ComfyUI Live Status Badge -->
+                <div id="comfyui-badge" onclick="window.open('https://github.com/comfyanonymous/ComfyUI', '_blank')" style="
+                    display: flex; align-items: center; gap: 6px;
+                    padding: 4px 10px; border-radius: 20px; cursor: pointer;
+                    background: rgba(107,114,128,0.12); border: 1px solid rgba(107,114,128,0.25);
+                    font-size: 11px; font-weight: 700; color: #6b7280;
+                    transition: all 0.2s; white-space: nowrap;
+                " title="ComfyUI: Free local AI image-to-video (Wan/LTX)">
+                    <span id="comfyui-dot" style="width:6px;height:6px;border-radius:50%;background:#6b7280;flex-shrink:0;"></span>
+                    <span id="comfyui-label">ComfyUI Checking...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ════════ DASHBOARD ════════ -->
+        <div class="auto-view" id="view-dashboard">
+            <div class="dash-header">
+                <div>
+                    <h1 class="dash-title">Automation Dashboard</h1>
+                    <p class="dash-subtitle">Monitor your video creation pipeline in real-time</p>
+                </div>
+                <button class="btn-new-wf" id="btnNewWorkflow">+ New Workflow</button>
+            </div>
+
+            <!-- Stat Cards -->
+            <div class="stat-cards-grid">
+                <div class="stat-card" data-color="blue">
+                    <div class="sc-glow"></div>
+                    <div class="sc-top">
+                        <div class="sc-icon-wrap blue"><span>🎬</span></div>
+                        <div class="sc-trend up">Live System</div>
+                    </div>
+                    <div class="sc-value" data-target="0">0</div>
+                    <div class="sc-label">Total Videos Generated</div>
+                    <div class="sc-bar"><div class="sc-bar-fill" style="width:100%"></div></div>
+                </div>
+                <div class="stat-card" data-color="green">
+                    <div class="sc-glow"></div>
+                    <div class="sc-top">
+                        <div class="sc-icon-wrap green"><span>✅</span></div>
+                        <div class="sc-trend up">Published</div>
+                    </div>
+                    <div class="sc-value" data-target="0">0</div>
+                    <div class="sc-label">Total Published</div>
+                    <div class="sc-bar"><div class="sc-bar-fill" style="width:100%"></div></div>
+                </div>
+                <div class="stat-card" data-color="yellow">
+                    <div class="sc-glow"></div>
+                    <div class="sc-top">
+                        <div class="sc-icon-wrap yellow"><span>⚙️</span></div>
+                        <div class="sc-trend neutral">Processing</div>
+                    </div>
+                    <div class="sc-value" data-target="0">0</div>
+                    <div class="sc-label">Videos Processing</div>
+                    <div class="sc-bar"><div class="sc-bar-fill" style="width:100%"></div></div>
+                </div>
+                <div class="stat-card" data-color="red">
+                    <div class="sc-glow"></div>
+                    <div class="sc-top">
+                        <div class="sc-icon-wrap red"><span>❌</span></div>
+                        <div class="sc-trend down">Failed</div>
+                    </div>
+                    <div class="sc-value" data-target="0">0</div>
+                    <div class="sc-label">Failed Jobs</div>
+                    <div class="sc-bar"><div class="sc-bar-fill" style="width:100%"></div></div>
+                </div>
+                <div class="stat-card" data-color="cyan">
+                    <div class="sc-glow"></div>
+                    <div class="sc-top">
+                        <div class="sc-icon-wrap cyan"><span>👁</span></div>
+                        <div class="sc-trend up">Est. Reach</div>
+                    </div>
+                    <div class="sc-value" data-target="0">0</div>
+                    <div class="sc-label">Today's Views</div>
+                    <div class="sc-bar"><div class="sc-bar-fill" style="width:100%"></div></div>
+                </div>
+                <div class="stat-card" data-color="purple">
+                    <div class="sc-glow"></div>
+                    <div class="sc-top">
+                        <div class="sc-icon-wrap purple"><span>📺</span></div>
+                        <div class="sc-trend neutral">Channels</div>
+                    </div>
+                    <div class="sc-value" data-target="0">0</div>
+                    <div class="sc-label">Connected Channels</div>
+                    <div class="sc-bar"><div class="sc-bar-fill" style="width:100%"></div></div>
+                </div>
+            </div>
+
+            <!-- 🎬 Generated Videos with Local Path Links Section -->
+            <div class="dash-section" style="margin-bottom: 2rem;">
+                <div class="ds-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 1.25rem;">🎬</span>
+                        <h2 style="margin: 0; font-size: 1.05rem;">Generated Videos & Local Storage Repository</h2>
+                        <span class="ds-badge" id="dashVideoCountBadge">0 Videos Available</span>
+                    </div>
+                    <button class="ds-btn" id="btnRefreshDashboard">🔄 Refresh Metrics & Files</button>
+                </div>
+                <div id="dashVideosContainer" style="padding: 1rem;">
+                    <!-- Dynamically populated video cards with local paths and video links -->
+                    <div class="modal-loader" style="padding: 2rem;"><div class="spinner"></div><p>Scanning local storage & video repository...</p></div>
+                </div>
+            </div>
+
+            <!-- Lower dashboard section: Pipeline Runs & Activity Feed -->
+            <div class="dash-lower">
+                <div class="dash-section">
+                    <div class="ds-header">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span>⚡</span>
+                            <h2>Workflow Pipeline Runs & Retries</h2>
+                        </div>
+                        <span class="ds-badge" id="dashRunsCountBadge">0 Runs</span>
+                    </div>
+                    <div class="wf-list" id="wfList"></div>
+                </div>
+                <div class="dash-section">
+                    <div class="ds-header">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span>📡</span>
+                            <h2>Live Engine Activity Feed</h2>
+                        </div>
+                        <button class="ds-btn" id="btnViewAllActivity">Clear</button>
+                    </div>
+                    <div class="activity-list" id="actList"></div>
+                </div>
+            </div>
+        </div><!-- /dashboard -->
+
+        <!-- ════════ WORKFLOW BUILDER ════════ -->
+        <div class="auto-view hidden" id="view-builder">
+
+            <!-- Toolbar -->
+            <div class="wf-toolbar">
+                <div class="wtb-left">
+                    <div class="wf-name-wrap">
+                        <span class="wf-name-icon">⚡</span>
+                        <input class="wf-name-input" id="wfNameInput" value="YouTube Content Pipeline" spellcheck="false">
+                    </div>
+                    <div class="wf-status-badge" id="wfStatusBadge">● Draft</div>
+                    
+                    <!-- Dynamic Presets Selector -->
+                    <div class="wf-preset-wrap">
+                        <select class="wf-preset-select" id="wfPresetSelect" title="Load a workflow template">
+                            <option value="">⚡ Presets / Templates</option>
+                            <option value="viral_shorts">🚀 Full Viral Shorts Pipeline</option>
+                            <option value="cinematic_story">🎬 Cinematic AI Faceless Story</option>
+                            <option value="news_pulse">📰 Fast News Pulse Video</option>
+                            <option value="meme_hook">🎭 Viral Hook & SFX Short</option>
+                        </select>
+                    </div>
+
+                    <!-- Visual Art Style Matrix Selector -->
+                    <div class="wf-preset-wrap" style="margin-left: 2px;">
+                        <select class="wf-preset-select" id="wfStyleSelect" title="Select Visual Art Style Matrix" style="border-color: rgba(0, 255, 170, 0.4); color: #00FFAA; font-weight: 600;">
+                            <option value="cinema_8k">🎬 8K Cinema</option>
+                            <option value="cyberpunk">🌆 Cyberpunk Sci-Fi</option>
+                            <option value="anime_ghibli">🎨 Studio Ghibli Anime</option>
+                            <option value="vintage_doc">📜 Vintage Documentary</option>
+                            <option value="unreal_3d">🎮 3D Unreal Engine</option>
+                        </select>
+                    </div>
+
+                    <!-- AI Market Live Status -->
+                    <div class="ai-market-badge" id="aiMarketBadge">
+                        <span class="ai-market-dot">●</span> <span id="aiMarketText">Free AI: Online</span>
+                    </div>
+
+                    {% if user_role|lower == 'admin' %}
+                    <!-- Admin Exclusive Background Workflow Intelligence Pill -->
+                    <div class="admin-sync-pill" id="btnAdminSyncHub" title="Admin Background Workflow Intelligence Center">
+                        <span class="pulse-admin-dot"></span>
+                        <span>🛡️ Admin Sync:</span>
+                        <span id="adminSyncStatusText">4 Workers Active</span>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <div class="wtb-right">
+                    <button class="btn-tb" id="btnLoad" title="Load workflow">📂 Load</button>
+                    <button class="btn-tb" id="btnSave" title="Save workflow">💾 Save</button>
+                    <button class="btn-tb" id="btnResetView" title="Reset View (78%)">🔍 78%</button>
+                    <button class="btn-tb" id="btnCenterWorkflow" title="Center Node n1">🎯 Focus</button>
+                    <button class="btn-tb btn-danger" id="btnClearCanvas" title="Clear Canvas">🗑 Clear</button>
+                    <div class="tb-divider"></div>
+                    <button class="btn-tb btn-recipe" id="btnViewEditingRecipe" title="View learned video editing recipe">
+                        🧠 AI Recipe
+                    </button>
+                    <button class="btn-tb btn-yt-connect" id="btnConnectYoutube" onclick="window.location.href='/youtube/authorize'" title="Connect YouTube account">
+                        <span class="yt-icon">▶</span> YouTube
+                    </button>
+                    <button class="btn-run" id="btnRun" title="Execute current workflow pipeline">
+                        <span class="run-icon">▶</span> Start Workflow
+                    </button>
+                    <button class="btn-stop hidden" id="btnStop"><span>⏹</span> Stop</button>
+                </div>
+            </div>
+
+            <!-- ── DEDICATED LIVE WORKFLOW PROGRESS STRIP ── -->
+            <div class="wf-live-progress-strip hidden" id="wfProgressArea">
+                <div class="wfps-left">
+                    <span class="wfps-pulse-icon">⚡</span>
+                    <div>
+                        <div class="wfps-title">Workflow Pipeline Executing</div>
+                        <div class="wfps-step" id="wfpStep">Current task: "Ready"</div>
+                    </div>
+                </div>
+                <div class="wfps-center">
+                    <div class="wfps-bar-outer">
+                        <div class="wfps-bar-fill" id="wfpFill" style="width:0%"></div>
+                    </div>
+                    <div class="wfps-stats">
+                        <span class="wfps-pct" id="wfpPct">0%</span>
+                        <span class="wfps-eta" id="wfpEta">Calculating time...</span>
+                    </div>
+                </div>
+                <div class="wfps-right">
+                    <span class="wfps-live-tag">● LIVE EXECUTION</span>
+                </div>
+            </div>
+
+            <!-- ── ACTIVE SELECTED SIGNAL / SOURCE BAR ── -->
+            <div class="wf-source-bar" id="wfSourceBar">
+                <div class="wf-source-left">
+                    <span class="wf-source-icon">📌</span>
+                    <span class="wf-source-label">Active Input Signal:</span>
+                    <div id="wfSourceContent" class="wf-source-content">
+                        <!-- Populated dynamically: Selected article card or Empty warning -->
+                        <div class="wf-source-empty" id="wfSourceEmpty">
+                            <span class="wf-source-warning">⚠️ No Signal Selected</span>
+                            <span class="wf-source-hint">Workflow requires an article or viral video to generate content.</span>
+                        </div>
+                        <div class="wf-source-active hidden" id="wfSourceActive">
+                            <img id="wfSourceImg" class="wf-source-thumb" src="" alt="Thumbnail">
+                            <div class="wf-source-meta">
+                                <span class="wf-source-title" id="wfSourceTitle">Article Title</span>
+                                <div class="wf-source-tags">
+                                    <span class="badge badge-ai" id="wfSourceTopic">AI News</span>
+                                    <span class="score-tag score-viral" id="wfSourceScore" style="font-size:0.7rem;">🔥 95</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="wf-source-right">
+                    <button class="btn-select-signal" id="btnOpenSignalPicker">
+                        📰 Select Article from News / Saved
+                    </button>
+                </div>
+            </div>
+
+            <!-- Builder main split -->
+            <div class="builder-split">
+
+                <!-- LEFT: Node Palette -->
+                <aside class="node-palette" id="nodePalette">
+                    <div class="palette-search-wrap">
+                        <input class="palette-search" id="paletteSearch" placeholder="Search nodes..." type="search">
+                    </div>
+                    <div class="palette-cats" id="paletteCats"></div>
+                </aside>
+
+                <!-- CENTER: Canvas -->
+                <div class="canvas-wrap" id="canvasWrap">
+                    <!-- Execution Lock Overlay -->
+                    <div class="canvas-lock-banner hidden" id="canvasLockBanner" style="position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 50; background: rgba(15, 23, 42, 0.92); border: 1px solid #fbbf24; border-radius: 30px; padding: 8px 20px; font-size: 13px; font-weight: 700; color: #fbbf24; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 20px rgba(251, 191, 36, 0.25); backdrop-filter: blur(8px); pointer-events: none;">
+                        <span style="animation: spin 2s linear infinite;">🔒</span> <span>Workflow Executing — Canvas Locked</span>
+                    </div>
+
+                    <!-- Dot-grid background (not transformed) -->
+                    <div class="canvas-grid" id="canvasGrid"></div>
+                    <!-- Workspace (pan + zoom applied via CSS transform) -->
+                    <div class="canvas-ws" id="canvasWS">
+                        <svg class="canvas-svg" id="canvasSVG" xmlns="http://www.w3.org/2000/svg">
+                            <defs>
+                                <marker id="ah" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+                                    <polygon points="0 0,8 3,0 6" fill="rgba(79,195,247,0.85)"/>
+                                </marker>
+                                <marker id="ah-run" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+                                    <polygon points="0 0,8 3,0 6" fill="#fbbf24"/>
+                                </marker>
+                                <marker id="ah-ok" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+                                    <polygon points="0 0,8 3,0 6" fill="#34d399"/>
+                                </marker>
+                                <filter id="glow-filter" x="-50%" y="-50%" width="200%" height="200%">
+                                    <feGaussianBlur stdDeviation="3" result="blur"/>
+                                    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                                </filter>
+                            </defs>
+                            <g id="connGroup"></g>
+                            <path id="tempLine" class="temp-conn hidden" fill="none"/>
+                        </svg>
+                        <div class="nodes-layer" id="nodesLayer"></div>
+                    </div>
+
+                    <!-- Canvas controls overlay -->
+                    <div class="zoom-controls">
+                        <button class="zoom-btn" id="btnZoomIn" title="Zoom in">+</button>
+                        <span class="zoom-val" id="zoomVal">78%</span>
+                        <button class="zoom-btn" id="btnZoomOut" title="Zoom out">-</button>
+                    </div>
+
+                    <!-- Mini-map -->
+                    <canvas class="minimap" id="minimap" width="190" height="120"></canvas>
+
+                    <!-- Canvas hint -->
+                    <div class="canvas-hint" id="canvasHint">
+                        <span>Drag nodes from the left panel · Connect ports · Scroll to zoom · Middle-click to pan</span>
+                    </div>
+                </div>
+
+                <!-- RIGHT: Properties Panel -->
+                <aside class="props-panel" id="propsPanel">
+                    <div class="props-empty" id="propsEmpty">
+                        <div class="pe-icon">🎛️</div>
+                        <p class="pe-text">Select a node to<br>configure its settings</p>
+                    </div>
+                    <div class="props-content hidden" id="propsContent"></div>
+                </aside>
+            </div><!-- /builder-split -->
+
+            <!-- BOTTOM: Execution Console -->
+            <div class="exec-console" id="execConsole">
+                <div class="console-hdr">
+                    <div class="ch-left">
+                        <div class="ch-dot" id="chDot"></div>
+                        <span class="ch-title">Execution Console</span>
+                        <span class="ch-count" id="chCount">0 entries</span>
+                    </div>
+                    <div class="ch-right">
+                        <button class="ch-btn" id="btnClearLog">Clear</button>
+                        <button class="ch-btn" id="btnCollapseConsole">▼</button>
+                    </div>
+                </div>
+                <div class="console-body" id="consoleBody">
+                    <div class="console-empty-msg">
+                        <span>// Run a workflow to see execution logs here</span>
+                    </div>
+                </div>
+            </div>
+
+        </div><!-- /view-builder -->
+
+        <!-- ════════ SOUND LIBRARY ════════ -->
+        <div class="auto-view hidden" id="view-audio-library">
+            <div class="dash-header">
+                <div>
+                    <h1 class="dash-title">🎵 AI Audio Intelligence Agent</h1>
+                    <p class="dash-subtitle">Browse royalty-free music, viral meme sounds, and monitor the Audio Agent's neural decisions</p>
+                </div>
+                <div style="display: flex; gap: 12px;">
+                    <button class="btn-new-wf" id="btnSyncLibrary" style="background: linear-gradient(135deg, #00FFAA, #00B8FF); color: #000; font-weight: 700; border: none; padding: 10px 22px; border-radius: 8px; cursor: pointer; transition: all 0.2s;">🔄 Sync Sounds</button>
+                </div>
+            </div>
+
+            <!-- Upper Panel: Stats & Agent Console -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px;">
+                <div class="dash-section" style="display: flex; flex-direction: column;">
+                    <div class="ds-header">
+                        <h2>Agent Intelligence Stats</h2>
+                        <span class="ds-badge" id="audio-stats-total">0 sounds</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px;">
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 14px; border-radius: 12px;">
+                            <div style="color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;">Music Tracks</div>
+                            <div style="font-size: 28px; font-weight: 800; color: #00B8FF; margin-top: 6px; font-family: 'Space Grotesk', sans-serif;" id="audio-stats-music">0</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 14px; border-radius: 12px;">
+                            <div style="color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;">SFX & Memes</div>
+                            <div style="font-size: 28px; font-weight: 800; color: #00FFAA; margin-top: 6px; font-family: 'Space Grotesk', sans-serif;" id="audio-stats-sfx">0</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 14px; border-radius: 12px;">
+                            <div style="color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;">Downloaded Locally</div>
+                            <div style="font-size: 28px; font-weight: 800; color: #fbbf24; margin-top: 6px; font-family: 'Space Grotesk', sans-serif;" id="audio-stats-downloaded">0</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 14px; border-radius: 12px;">
+                            <div style="color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;">Top Emotion Niche</div>
+                            <div style="font-size: 22px; font-weight: 800; color: #f472b6; margin-top: 6px; font-family: 'Space Grotesk', sans-serif;" id="audio-stats-niche">Energetic</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="dash-section" style="display: flex; flex-direction: column; min-height: 200px;">
+                    <div class="ds-header">
+                        <h2>Agent Decision Console</h2>
+                        <span class="ds-badge" style="background: rgba(0, 255, 170, 0.1); color: #00FFAA;">Brain Online</span>
+                    </div>
+                    <div id="audioAgentLog" style="flex-grow: 1; overflow-y: auto; padding: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #38bdf8; background: rgba(0,0,0,0.2); margin: 0 12px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04); max-height: 200px;">
+                        <div style="color: #64748b;">// Awaiting actions...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Lower Part: Browsable Grid with Filter Bar -->
+            <div class="dash-section" style="display: flex; flex-direction: column; padding: 16px;">
+                <div class="ds-header" style="flex-wrap: wrap; gap: 16px; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 16px; margin-bottom: 16px;">
+                    <h2>🎶 Sound Catalog</h2>
+                    
+                    <!-- Search and filters -->
+                    <div style="display: flex; gap: 12px; flex-grow: 1; justify-content: flex-end; flex-wrap: wrap;">
+                        <input type="text" id="soundSearch" placeholder="🔍 Search sounds, tags..." style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); padding: 8px 14px; border-radius: 8px; color: #fff; font-family: inherit; font-size: 13px; width: 200px; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='rgba(0,255,170,0.5)'" onblur="this.style.borderColor='rgba(255,255,255,0.12)'">
+                        
+                        <select id="soundCategory" style="background: rgba(14,18,30,0.95); border: 1px solid rgba(255,255,255,0.12); padding: 8px 14px; border-radius: 8px; color: #fff; font-family: inherit; font-size: 13px; cursor: pointer; outline: none;">
+                            <option value="">All Categories</option>
+                            <option value="music">🎵 Music</option>
+                            <option value="sfx">⚡ SFX</option>
+                            <option value="meme">🎭 Meme</option>
+                        </select>
+                        
+                        <select id="soundEmotion" style="background: rgba(14,18,30,0.95); border: 1px solid rgba(255,255,255,0.12); padding: 8px 14px; border-radius: 8px; color: #fff; font-family: inherit; font-size: 13px; cursor: pointer; outline: none;">
+                            <option value="">All Emotions</option>
+                            <option value="energetic">⚡ Energetic</option>
+                            <option value="suspense">🕵️ Suspense</option>
+                            <option value="funny">😂 Funny</option>
+                            <option value="shock">😱 Shock</option>
+                            <option value="inspiration">🌟 Inspiration</option>
+                            <option value="futuristic">🤖 Futuristic</option>
+                            <option value="calm">🧘 Calm</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <!-- Sounds Grid — grows as content is loaded, parent view scrolls -->
+                <div id="soundsGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
+                    <!-- Dynamically populated sound cards -->
+                </div>
+                
+                <!-- Pagination -->
+                <div style="display: flex; justify-content: center; align-items: center; padding: 20px 16px 8px; gap: 16px; border-top: 1px solid rgba(255,255,255,0.05); margin-top: 24px;">
+                    <button id="soundPrevPage" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); color: #fff; padding: 7px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s;">← Previous</button>
+                    <span id="soundPageInfo" style="color: #94a3b8; font-size: 13px; min-width: 120px; text-align: center;">Page 1 of 1</span>
+                    <button id="soundNextPage" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); color: #fff; padding: 7px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s;">Next →</button>
+                </div>
+            </div>
+        </div><!-- /view-audio-library -->
+
+    </div><!-- /auto-shell -->
+
+    <!-- Context Menu -->
+    <div class="ctx-menu hidden" id="ctxMenu">
+        <button class="ctx-item" data-action="properties">⚙️ Properties</button>
+        <button class="ctx-item" data-action="duplicate">⧉ Duplicate</button>
+        <div class="ctx-sep"></div>
+        <button class="ctx-item ctx-danger" data-action="delete">🗑 Delete Node</button>
+    </div>
+
+    <!-- Node config modal (for inline settings) -->
+    <div class="modal-overlay hidden" id="configModalOverlay">
+        <div class="config-modal" id="configModal">
+            <div class="cm-header">
+                <div class="cm-icon-name">
+                    <span class="cm-icon" id="cmIcon"></span>
+                    <span class="cm-title" id="cmTitle">Node Settings</span>
+                </div>
+                <button class="modal-close" id="cmClose">✕</button>
+            </div>
+            <div class="cm-body" id="cmBody"></div>
+            <div class="cm-footer">
+                <button class="cm-btn-cancel" id="cmCancel">Cancel</button>
+                <button class="cm-btn-save" id="cmSaveConfig">Save Config</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Signal Picker Modal ── -->
+    <div class="modal-overlay hidden" id="signalPickerModal">
+        <div class="modal-box" style="max-width: 820px; max-height: 85vh; background: #0b0f19; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; display: flex; flex-direction: column;">
+            <div class="modal-header" style="padding: 1.25rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h2 style="font-family: 'Space Grotesk', sans-serif; font-size: 1.25rem; font-weight: 700; color: #fff;">📰 Select Input Signal / News Article</h2>
+                    <p style="font-size: 0.8rem; color: #94a3b8; margin-top: 2px;">Bind real-time intelligence directly to your video creation workflow</p>
+                </div>
+                <button class="modal-close" id="signalPickerClose">✕</button>
+            </div>
+            
+            <!-- Modal Subnav -->
+            <div style="display: flex; gap: 8px; padding: 12px 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.02);">
+                <button class="signal-tab active" data-source="saved" id="signalTabSaved" style="padding: 6px 14px; border-radius: 8px; background: rgba(79,195,247,0.15); color: #38bdf8; border: 1px solid rgba(79,195,247,0.3); font-weight: 600; cursor: pointer; font-size: 0.82rem;">🔖 Saved Articles</button>
+                <button class="signal-tab" data-source="news" id="signalTabNews" style="padding: 6px 14px; border-radius: 8px; background: transparent; color: #94a3b8; border: 1px solid rgba(255,255,255,0.08); font-weight: 600; cursor: pointer; font-size: 0.82rem;">⚡ Top News Feed</button>
+                <button class="signal-tab" data-source="viral" id="signalTabViral" style="padding: 6px 14px; border-radius: 8px; background: transparent; color: #94a3b8; border: 1px solid rgba(255,255,255,0.08); font-weight: 600; cursor: pointer; font-size: 0.82rem;">🔥 Viral Video Hits</button>
+                <button class="signal-tab" data-source="custom" id="signalTabCustom" style="padding: 6px 14px; border-radius: 8px; background: transparent; color: #94a3b8; border: 1px solid rgba(255,255,255,0.08); font-weight: 600; cursor: pointer; font-size: 0.82rem;">🔗 Custom URL / Topic</button>
+            </div>
+
+            <!-- Signal Picker Body -->
+            <div id="signalPickerBody" style="padding: 1.5rem; overflow-y: auto; flex: 1; max-height: 55vh;">
+                <div class="modal-loader"><div class="spinner"></div><p>Loading signals...</p></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── AI Video Editing Recipe Modal ── -->
+    <div class="modal-overlay hidden" id="editingRecipeModal">
+        <div class="modal-box" style="max-width: 750px; max-height: 85vh; background: #0d1121; border: 1px solid rgba(181, 123, 238, 0.3); border-radius: 16px; display: flex; flex-direction: column;">
+            <div class="modal-header" style="padding: 1.25rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h2 style="font-family: 'Space Grotesk', sans-serif; font-size: 1.2rem; font-weight: 700; color: #fff;">🧠 Learned Video Editing Blueprint</h2>
+                    <p style="font-size: 0.8rem; color: #c084fc; margin-top: 2px;">Synthesized in real-time by Local AI from high-retention video signals</p>
+                </div>
+                <button class="modal-close" id="editingRecipeClose">✕</button>
+            </div>
+            <div id="editingRecipeBody" style="padding: 1.5rem; overflow-y: auto; flex: 1; font-size: 0.88rem; color: #c9d1e0; line-height: 1.6;">
+                <div class="modal-loader"><div class="spinner"></div><p>Synthesizing editing recipe...</p></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Generated Video Player Modal ── -->
+    <div class="modal-overlay hidden" id="dashVideoModal">
+        <div class="modal-box" style="max-width: 640px; background: #0b0f19; border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 16px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.8), 0 0 30px rgba(56,189,248,0.2);">
+            <div class="modal-header" style="padding: 1rem 1.25rem; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 1.2rem;">🎬</span>
+                    <h3 id="dashVideoModalTitle" style="font-family: 'Space Grotesk', sans-serif; font-size: 1.05rem; font-weight: 700; color: #fff; margin: 0;">Preview Generated Video</h3>
+                </div>
+                <button class="modal-close" id="dashVideoModalClose">✕</button>
+            </div>
+            <div style="padding: 1.25rem; display: flex; flex-direction: column; align-items: center; background: #000;">
+                <video id="dashVideoPlayer" controls autoplay style="width: 100%; max-height: 480px; border-radius: 8px; outline: none; background: #000;"></video>
+            </div>
+            <div style="padding: 1rem 1.25rem; background: rgba(255,255,255,0.03); border-top: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
+                <div style="font-size: 0.78rem; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 380px;">
+                    <span style="color: #38bdf8; font-weight: 600;">Path:</span> <code id="dashVideoModalPath" style="background: rgba(0,0,0,0.4); padding: 2px 6px; border-radius: 4px; font-family: monospace; color: #cbd5e1;"></code>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button id="btnCopyModalVideoPath" style="padding: 6px 12px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; color: #fff; font-size: 0.78rem; cursor: pointer;">📋 Copy Path</button>
+                    <a id="btnDownloadModalVideo" href="#" download style="padding: 6px 12px; background: linear-gradient(135deg, #0284c7, #38bdf8); border: none; border-radius: 6px; color: #fff; font-weight: 700; font-size: 0.78rem; text-decoration: none; display: flex; align-items: center; gap: 4px;">⬇ Download</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if user_role|lower == 'admin' %}
+    <!-- ── Admin Background Intelligence Hub Modal ── -->
+    <div class="modal-overlay hidden" id="adminSyncHubModal">
+        <div class="modal-box" style="max-width: 820px; max-height: 88vh; background: #0b0f19; border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 16px; display: flex; flex-direction: column; box-shadow: 0 16px 48px rgba(0,0,0,0.8), 0 0 24px rgba(56,189,248,0.15);">
+            <div class="modal-header" style="padding: 1.25rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="font-size: 24px;">🛡️</div>
+                    <div>
+                        <h2 style="font-family: 'Space Grotesk', sans-serif; font-size: 1.2rem; font-weight: 700; color: #fff; margin: 0;">Admin Background Workflow Intelligence</h2>
+                        <p style="font-size: 0.8rem; color: #94a3b8; margin-top: 2px;">Continuous auto-updating sound library, AI market models, viral pacing blueprints & dynamic options</p>
+                    </div>
+                </div>
+                <button class="modal-close" id="adminSyncHubClose">✕</button>
+            </div>
+
+            <!-- Stats Bar -->
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 14px 1.5rem; background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.06);">
+                <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; text-align: center; border: 1px solid rgba(255,255,255,0.05);">
+                    <div style="font-size: 0.72rem; color: #94a3b8;">Total Sync Cycles</div>
+                    <div id="adminStatCycles" style="font-size: 1.1rem; color: #38bdf8; font-weight: 700; margin-top: 2px;">0</div>
+                </div>
+                <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; text-align: center; border: 1px solid rgba(255,255,255,0.05);">
+                    <div style="font-size: 0.72rem; color: #94a3b8;">Sounds & SFX Indexed</div>
+                    <div id="adminStatSounds" style="font-size: 1.1rem; color: #10b981; font-weight: 700; margin-top: 2px;">0</div>
+                </div>
+                <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; text-align: center; border: 1px solid rgba(255,255,255,0.05);">
+                    <div style="font-size: 0.72rem; color: #94a3b8;">Editing Blueprints</div>
+                    <div id="adminStatBlueprints" style="font-size: 1.1rem; color: #c084fc; font-weight: 700; margin-top: 2px;">0</div>
+                </div>
+                <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; text-align: center; border: 1px solid rgba(255,255,255,0.05);">
+                    <div style="font-size: 0.72rem; color: #94a3b8;">AI Models Online</div>
+                    <div id="adminStatModels" style="font-size: 1.1rem; color: #fbbf24; font-weight: 700; margin-top: 2px;">0</div>
+                </div>
+            </div>
+
+            <div style="padding: 1.25rem 1.5rem; overflow-y: auto; flex: 1; max-height: 52vh;">
+                <!-- Background Workers List -->
+                <h4 style="color: #fff; font-size: 0.9rem; margin-bottom: 10px; font-weight: 600;">Active Background Daemons & Scrapers</h4>
+                <div id="adminWorkersList" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px;">
+                    <!-- Dynamically populated -->
+                </div>
+
+                <!-- Live Stream of Background Updates -->
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <h4 style="color: #fff; font-size: 0.9rem; font-weight: 600; margin: 0;">⚡ Live Background Execution Log</h4>
+                    <span id="adminLastSyncTime" style="font-size: 0.75rem; color: #64748b;">Last cycle: Just now</span>
+                </div>
+                <div id="adminSyncLiveLogs" style="background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 12px; font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; max-height: 160px; overflow-y: auto; color: #94a3b8;">
+                    <!-- Dynamically populated logs -->
+                </div>
+            </div>
+
+            <!-- Footer Actions -->
+            <div style="padding: 12px 1.5rem; border-top: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.02);">
+                <div style="font-size: 0.8rem; color: #64748b;">
+                    🛡️ Admin privilege granted. Auto-sync occurs in background on startup & every 6 mins.
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <button id="btnAdminTriggerSync" style="padding: 8px 16px; background: linear-gradient(135deg, #0284c7, #38bdf8); border: none; border-radius: 8px; color: #fff; font-weight: 700; font-size: 0.84rem; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                        <span>🔄</span> Trigger Instant Background Sync
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        window.PF = { userRole: '{{ user_role }}', userName: '{{ user_name }}' };
+    </script>
+    <script src="{{ url_for('static', filename='automation.js') }}"></script>
+    <script src="{{ url_for('static', filename='agam.js') }}"></script>
+</body>
+</html>

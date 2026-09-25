@@ -1,0 +1,112 @@
+{
+  "version": "1.0",
+  "total_videos_learned": 5,
+  "transition_scores": {
+    "speed_ramp": 1.476,
+    "zoom_burst_in": 1.781,
+    "zoom_burst_out": 1.281,
+    "whip_pan_left": 1.426,
+    "whip_pan_right": 1.352,
+    "motion_blur_push": 1.619,
+    "glitch_flash": 1.13,
+    "crossfade": 0.924
+  },
+  "pacing_target_wps": 2.6,
+  "optimal_scene_duration": 3.2,
+  "audio_mix": {
+    "voice": 1.0,
+    "music": 0.18,
+    "sfx": 0.38
+  },
+  "successful_prompt_tokens": [
+    "cinematic lighting",
+    "dramatic rim light",
+    "anamorphic 8k",
+    "volumetric rays",
+    "sharp focus",
+    "hyperrealistic texture"
+  ],
+  "history": [
+    {
+      "timestamp": 1789827152,
+      "video_id": "video_n9.mp4",
+      "topic": "PulseForge Short",
+      "viral_score": 85.0,
+      "visual_style": "Cinematic High-Retention",
+      "transitions_used": [
+        "zoom_burst_in",
+        "motion_blur_push",
+        "zoom_burst_in",
+        "zoom_burst_out",
+        "motion_blur_push",
+        "whip_pan_left",
+        "zoom_burst_in"
+      ]
+    },
+    {
+      "timestamp": 1789830441,
+      "video_id": "video_n9.mp4",
+      "topic": "PulseForge Short",
+      "viral_score": 85.0,
+      "visual_style": "Cinematic High-Retention",
+      "transitions_used": [
+        "zoom_burst_in",
+        "motion_blur_push",
+        "glitch_flash",
+        "motion_blur_push",
+        "zoom_burst_in",
+        "glitch_flash",
+        "motion_blur_push",
+        "whip_pan_left",
+        "motion_blur_push"
+      ]
+    },
+    {
+      "timestamp": 1789840586,
+      "video_id": "video_n9.mp4",
+      "topic": "PulseForge Short",
+      "viral_score": 85.0,
+      "visual_style": "Cinematic High-Retention",
+      "transitions_used": [
+        "zoom_burst_in",
+        "whip_pan_left",
+        "speed_ramp",
+        "whip_pan_left",
+        "speed_ramp",
+        "motion_blur_push",
+        "zoom_burst_in",
+        "whip_pan_left",
+        "whip_pan_right"
+      ]
+    },
+    {
+      "timestamp": 1789843623,
+      "video_id": "video_n9.mp4",
+      "topic": "The Blood of Dawnwalker Modders Aren\u2019t Missing the Point \u2013 They Just Love the Game",
+      "viral_score": 95.0,
+      "visual_style": "Cinematic High-Retention",
+      "transitions_used": [
+        "zoom_burst_in",
+        "motion_blur_push",
+        "speed_ramp",
+        "zoom_burst_out",
+        "whip_pan_right"
+      ]
+    },
+    {
+      "timestamp": 1789887531,
+      "video_id": "video_n9.mp4",
+      "topic": "The Batman Part 2 Director Reveals New Image Seemingly Set in a Snowy Gotham Junkyard",
+      "viral_score": 95.0,
+      "visual_style": "Cinematic High-Retention",
+      "transitions_used": [
+        "zoom_burst_in",
+        "motion_blur_push",
+        "zoom_burst_in",
+        "zoom_burst_out",
+        "whip_pan_left",
+        "crossfade"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PulseForge — AI & Trend Intelligence Dashboard</title>
+    <meta name="description" content="Real-time AI model drops, HackerNews breakthroughs, pop culture, tech, gaming and more — all in one zero-cost dashboard.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='agam.css') }}">
+</head>
+<body>
+
+    <!-- Animated Background -->
+    <div class="bg-orb bg-orb-1"></div>
+    <div class="bg-orb bg-orb-2"></div>
+    <div class="bg-orb bg-orb-3"></div>
+
+    <!-- ── Refresh Notification Banner ── -->
+    <div class="refresh-banner hidden" id="refreshBanner">
+        <span class="refresh-banner-icon">🔄</span>
+        <span id="refreshBannerText">Fetching latest trends…</span>
+        <div class="refresh-mini-bar" id="refreshMiniBar"></div>
+    </div>
+
+    <!-- ── Navbar ── -->
+    <nav class="navbar" id="navbar">
+        <div class="nav-inner">
+
+            <div class="nav-brand">
+                <span class="brand-icon">⚡</span>
+                <span class="brand-text">PulseForge</span>
+                <span class="brand-badge">LIVE</span>
+            </div>
+
+            <div class="nav-page-tabs">
+                <button class="nav-page-tab active" id="tabNewsFeed">📰 News Feed</button>
+                <button class="nav-page-tab" id="tabViralHits">🔥 Viral Hits</button>
+                <a href="/automation" class="nav-page-tab">⚙️ Automation</a>
+            </div>
+
+            <div class="nav-actions">
+                <!-- Say Agam AI Voice Assistant Trigger -->
+                <button class="nav-btn-agam" id="navSayAgamBtn" title="Say 'Agam' or Click to talk with AI Assistant">
+                    <span class="nav-agam-reactor-icon">
+                        <span class="nav-agam-core"></span>
+                    </span>
+                    <span class="nav-agam-label">🎙️ Say "Agam"</span>
+                    <span class="nav-agam-badge">AI</span>
+                </button>
+
+                <!-- Refresh status pill -->
+                <div class="refresh-pill" id="refreshPill">
+                    <span class="pulse-dot" id="pulseDot"></span>
+                    <span id="refreshPillText">—</span>
+                </div>
+
+                <!-- Bookmarks toggle -->
+                <button class="btn-icon" id="savedPanelToggle" title="Saved articles">
+                    🔖
+                    <span class="saved-badge hidden" id="savedBadgeCount">0</span>
+                </button>
+
+                <!-- Manual refresh -->
+                <button class="btn-refresh" id="refreshBtn" title="Refresh now">
+                    <svg class="icon-spin-target" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    <span>Refresh</span>
+                </button>
+
+                <!-- User chip -->
+                <div class="user-chip">
+                    <div class="user-avatar">{{ user_name[0]|upper }}</div>
+                    <div class="user-info">
+                        <span class="user-name">{{ user_name }}</span>
+                        <span class="user-role">{{ user_role }}</span>
+                    </div>
+                    <a href="/logout" class="logout-btn" title="Sign out">↩</a>
+                </div>
+            </div>
+
+        </div>
+    </nav>
+
+    <!-- ── Hero ── -->
+    <header class="hero" id="heroSection">
+        <div class="hero-content">
+            <div class="hero-eyebrow" id="heroEyebrow">Zero-cost · Zero API keys · Real-time intelligence</div>
+            <h1 class="hero-title" id="heroTitle">Forge Viral Content from<br><span class="gradient-text">Real-Time Signals</span></h1>
+            <p class="hero-subtitle" id="heroSubtitle">AI model drops · HackerNews · Pop Culture · Tech · Gaming · Science · YouTube & Instagram Hits</p>
+        </div>
+    </header>
+
+    <!-- ── Main Layout (News Feed View) ── -->
+    <main class="main-layout" id="newsFeedSection">
+
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <div class="sidebar-header">
+                    <span class="sidebar-header-icon">🗂️</span>
+                    <span class="sidebar-header-text">Filter Topics</span>
+                </div>
+                <div class="topic-list" id="topicList">
+                    <button class="topic-pill active" data-topic="All Topics">🌐 All Topics</button>
+                </div>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div class="sidebar-section">
+                <div class="sidebar-header">
+                    <span class="sidebar-header-icon">↕️</span>
+                    <span class="sidebar-header-text">Sort Stream</span>
+                </div>
+                <div class="sort-group">
+                    <button class="sort-btn active" data-sort="score" id="sortScore">
+                        🔥 Viral Score
+                    </button>
+                    <button class="sort-btn" data-sort="newest" id="sortNewest">
+                        🕐 Newest First
+                    </button>
+                </div>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div class="sidebar-section">
+                <div class="sidebar-header">
+                    <span class="sidebar-header-icon">📊</span>
+                    <span class="sidebar-header-text">Live Metrics</span>
+                </div>
+                <div class="sidebar-stats">
+                    <div class="sidebar-stat">
+                        <span class="stat-val" id="ssTotalArticles">—</span>
+                        <span class="stat-lbl">Total Signals</span>
+                    </div>
+                    <div class="sidebar-stat">
+                        <span class="stat-val" id="ssTopics">—</span>
+                        <span class="stat-lbl">Categories</span>
+                    </div>
+                    <div class="sidebar-stat">
+                        <span class="stat-val" id="ssLastRefresh">—</span>
+                        <span class="stat-lbl">Last Sync</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Content Area -->
+        <section class="content-area">
+
+            <!-- Section Header Bar -->
+            <div class="content-header-bar">
+                <div class="content-heading-group">
+                    <h2 class="content-main-heading">📰 News & Signal Feed</h2>
+                    <p class="content-sub-heading">Real-time intelligence scraped from AI releases, HackerNews, tech, and cultural trends</p>
+                </div>
+                <!-- Stats bar -->
+                <div class="stats-bar">
+                    <div class="stat-chip" id="statTotal">📰 — articles</div>
+                    <div class="stat-chip" id="statNew">✨ — new</div>
+                    <div class="stat-chip" id="statPage">📄 Page —</div>
+                </div>
+            </div>
+
+            <!-- Skeletons -->
+            <div id="loader" class="card-grid">
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+            </div>
+
+            <!-- Article Grid -->
+            <div id="newsGrid" class="card-grid hidden"></div>
+
+            <!-- Empty State -->
+            <div id="emptyState" class="empty-state hidden">
+                <div class="empty-icon">🛰️</div>
+                <h2>No signals detected yet</h2>
+                <p>Articles are being fetched in the background. This takes 15–30 seconds on first load. Hit Refresh to check now.</p>
+                <button class="btn-refresh" id="emptyRefreshBtn">🔄 Check Now</button>
+            </div>
+
+            <!-- Pagination -->
+            <nav class="pagination-bar hidden" id="paginationBar">
+                <button class="page-btn" id="prevBtn" disabled>← Prev</button>
+                <div class="page-pills" id="pagePills"></div>
+                <button class="page-btn" id="nextBtn">Next →</button>
+            </nav>
+
+        </section>
+    </main>
+
+    <!-- ── Viral Video Hits Section ── -->
+    <main class="main-layout hidden" id="viralHitsSection">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <div class="sidebar-header">
+                    <span class="sidebar-header-icon">🎬</span>
+                    <span class="sidebar-header-text">Video Channels</span>
+                </div>
+                <div class="platform-list" id="platformList">
+                    <button class="topic-pill active" data-platform="all">🌐 All Viral Platforms</button>
+                    <button class="topic-pill" data-platform="youtube">🔴 YouTube Shorts & Hits</button>
+                    <button class="topic-pill" data-platform="instagram">🟣 Instagram Reels</button>
+                </div>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div class="sidebar-section">
+                <div class="sidebar-header">
+                    <span class="sidebar-header-icon">💡</span>
+                    <span class="sidebar-header-text">Creator Workflow</span>
+                </div>
+                <div class="sidebar-tip-box">
+                    <p>Click <strong>"🎬 Use as Video Script"</strong> on any viral hit to instantly inject its hook and structure into the <strong>Automation Workflow Builder</strong>!</p>
+                </div>
+            </div>
+        </aside>
+
+        <section class="content-area">
+            <!-- Section Header Bar -->
+            <div class="content-header-bar">
+                <div class="content-heading-group">
+                    <h2 class="content-main-heading">🔥 Viral Video Hits Stream</h2>
+                    <p class="content-sub-heading">Trending short-form video hooks scraped from YouTube Shorts & Instagram Reels</p>
+                </div>
+                <div class="stats-bar">
+                    <div class="stat-chip" id="videoStatTotal">🔥 High-Velocity Trends</div>
+                    <div class="stat-chip">⚡ Play Direct Video Below</div>
+                </div>
+            </div>
+
+            <div id="videoLoader" class="card-grid">
+                <div class="skeleton-card" style="height: 380px;"></div>
+                <div class="skeleton-card" style="height: 380px;"></div>
+                <div class="skeleton-card" style="height: 380px;"></div>
+            </div>
+
+            <div id="videoGrid" class="video-grid hidden"></div>
+        </section>
+    </main>
+
+    <!-- ── Saved Articles Panel ── -->
+    <div class="saved-overlay hidden" id="savedOverlay"></div>
+    <aside class="saved-panel hidden" id="savedPanel">
+        <div class="saved-panel-header">
+            <div>
+                <h2 class="saved-panel-title">🔖 Saved Articles</h2>
+                <p class="saved-panel-sub">Your personal content ideas workspace</p>
+            </div>
+            <button class="modal-close" id="savedPanelClose">✕</button>
+        </div>
+        <div class="saved-panel-body" id="savedPanelBody">
+            <div class="saved-empty">
+                <div class="empty-icon">🔖</div>
+                <p>No saved articles yet. Click the bookmark icon on any article card to save it here.</p>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ── Article Quick-Read Modal ── -->
+    <div class="modal-overlay hidden" id="modalOverlay">
+        <div class="modal-box" id="modalBox">
+            <div class="modal-media-banner hidden" id="modalMediaBanner">
+                <img id="modalImg" src="" alt="Featured Media" loading="lazy">
+                <div class="modal-media-overlay"></div>
+            </div>
+            <div class="modal-header">
+                <h2 class="modal-title" id="modalTitle">Loading…</h2>
+                <button class="modal-close" id="modalClose">✕</button>
+            </div>
+            <div class="modal-tags" id="modalTags"></div>
+            <div class="modal-body" id="modalBody">
+                <div class="modal-loader">
+                    <div class="spinner"></div>
+                    <p>Fetching article content…</p>
+                </div>
+            </div>
+            <div class="modal-footer" style="display:flex; gap:12px; justify-content: flex-end; align-items: center;">
+                <button id="modalAutoBtn" style="background: linear-gradient(135deg, #10b981, #059669); border: none; cursor: pointer; color: #fff; border-radius: 6px; padding: 0.5rem 1rem; font-weight: 600; font-family: inherit; font-size: 0.9rem; transition: transform 0.2s, box-shadow 0.2s;" onmouseover="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 12px rgba(16,185,129,0.3)';" onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
+                    🎬 Create Video Automation
+                </button>
+                <a class="btn-open-link" id="modalOpenLink" href="#" target="_blank" rel="noopener">
+                    ↗ Open Original Article
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Toast Container ── -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        // Pass server-side data to JS
+        window.PULSEFORGE = {
+            userRole: "{{ user_role }}"
+        };
+    </script>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+    <script src="{{ url_for('static', filename='agam.js') }}"></script>
+</body>
+</html>

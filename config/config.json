@@ -1,0 +1,13 @@
+{
+    "telegram": {
+        "bot_token": "YOUR_BOT_TOKEN_HERE",
+        "chat_id": "YOUR_CHAT_ID_HERE"
+    },
+    "scheduler": {
+        "interval_minutes": 5
+    },
+    "feeds": [
+        "https://hnrss.org/newest?q=AI",
+        "https://www.theverge.com/ai-artificial-intelligence/rss/index.xml"
+    ]
+}

@@ -1,0 +1,81 @@
+{
+  "image_providers": [
+    {
+      "id": "pollinations_flux",
+      "name": "Pollinations FLUX",
+      "type": "image",
+      "model": "flux",
+      "auth_required": false,
+      "endpoint": "https://image.pollinations.ai/prompt/{prompt}?model=flux&width={width}&height={height}&seed={seed}&nologo=true",
+      "priority": 1,
+      "status": "online",
+      "last_checked": 1790168415,
+      "latency_ms": 979
+    },
+    {
+      "id": "pollinations_turbo",
+      "name": "Pollinations Turbo (SDXL)",
+      "type": "image",
+      "model": "turbo",
+      "auth_required": false,
+      "endpoint": "https://image.pollinations.ai/prompt/{prompt}?model=turbo&width={width}&height={height}&seed={seed}&nologo=true",
+      "priority": 2,
+      "status": "online",
+      "last_checked": 1790168416,
+      "latency_ms": 923
+    },
+    {
+      "id": "hf_flux_schnell",
+      "name": "HuggingFace Serverless FLUX.1-schnell",
+      "type": "image",
+      "model": "black-forest-labs/FLUX.1-schnell",
+      "auth_required": true,
+      "env_key": "HF_TOKEN",
+      "endpoint": "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+      "priority": 3,
+      "status": "unconfigured_key",
+      "last_checked": 1790168416,
+      "latency_ms": 0
+    },
+    {
+      "id": "hf_sdxl_lightning",
+      "name": "HuggingFace ByteDance SDXL-Lightning",
+      "type": "image",
+      "model": "ByteDance/SDXL-Lightning",
+      "auth_required": true,
+      "env_key": "HF_TOKEN",
+      "endpoint": "https://api-inference.huggingface.co/models/ByteDance/SDXL-Lightning",
+      "priority": 4,
+      "status": "unconfigured_key",
+      "last_checked": 1790168416,
+      "latency_ms": 0
+    }
+  ],
+  "video_providers": [
+    {
+      "id": "motion_engine_cinematic",
+      "name": "PulseForge Motion Engine (Always Free)",
+      "type": "video",
+      "model": "procedural_cinematic",
+      "auth_required": false,
+      "priority": 1,
+      "status": "online",
+      "last_checked": 1790168416,
+      "latency_ms": 5
+    },
+    {
+      "id": "hf_svd",
+      "name": "HuggingFace Stable Video Diffusion",
+      "type": "video",
+      "model": "stabilityai/stable-video-diffusion-img2vid-xt",
+      "auth_required": true,
+      "env_key": "HF_TOKEN",
+      "endpoint": "https://api-inference.huggingface.co/models/stabilityai/stable-video-diffusion-img2vid-xt",
+      "priority": 2,
+      "status": "unconfigured_key",
+      "last_checked": 1790168416,
+      "latency_ms": 0
+    }
+  ],
+  "last_scan_time": 1790168416
+}
