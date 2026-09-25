@@ -722,6 +722,11 @@
 }
 .btn-tb:hover { color: var(--text); background: var(--surface-hover); border-color: var(--border-glow); }
 .btn-tb.btn-danger:hover { color: var(--neon-red); border-color: rgba(248,113,113,0.4); }
+.btn-tb.tb-on {
+    color: #10b981; background: rgba(16,185,129,0.14);
+    border-color: rgba(16,185,129,0.55);
+    box-shadow: 0 0 10px rgba(16,185,129,0.25);
+}
 .btn-recipe {
     background: rgba(181, 123, 238, 0.15) !important;
     border: 1px solid rgba(181, 123, 238, 0.35) !important;

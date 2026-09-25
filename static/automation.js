@@ -170,6 +170,53 @@ const NODE_CONFIGS = {
     ],
 };
 
+// ──────────────────────────────────────────────────────────────
+// 💰 FREE MODE — one-click zero-cost provider presets per node type.
+// Applied by the "Free Mode" toolbar toggle; also auto-applied to
+// newly added nodes while the toggle is on. Values match the free
+// options in NODE_CONFIGS above, and the backend chains fall back
+// to free providers (Pollinations / Ollama / HF) when keys are absent.
+// ──────────────────────────────────────────────────────────────
+const FREE_MODE_PRESETS = {
+    'gen-script':          { model: 'Gemini 2.0 Flash [Free]' },
+    'extract-viral-angle': { model: 'Gemini 2.0 Flash [Free]' },
+    'gen-hook':            { model: 'Gemini 2.0 Flash [Free]' },
+    'tts':                 { voice: 'Kokoro-82M (af_heart) [Local Free]' },
+    'gen-image':           { model: 'Pollinations FLUX [Free]' },
+    'image-gen':           { model: 'Pollinations FLUX [Free]' },
+    'visuals':             { model: 'Pollinations FLUX [Free]' },
+    'img-to-video':        { provider: 'ComfyUI (Local Wan 2.1 / LTX) [Free GPU]' },
+    'image-to-video':      { provider: 'ComfyUI (Local Wan 2.1 / LTX) [Free GPU]' },
+};
+
+function applyFreeModeToNode(node) {
+    const preset = FREE_MODE_PRESETS[node.type];
+    if (!preset) return false;
+    node.config = { ...(node.config || {}), ...preset };
+    node.data = { ...(node.data || {}), ...preset };
+    // reset any stale connection-test state — provider changed
+    node._connTested = false;
+    node._connOk = false;
+    return true;
+}
+
+function setFreeMode(on, silent) {
+    APP.freeMode = !!on;
+    if (D.btnFreeMode) D.btnFreeMode.classList.toggle('tb-on', APP.freeMode);
+    if (!APP.freeMode) {
+        if (!silent) showToast('💰 Free Mode OFF — node providers left as-is.', 'info');
+        return;
+    }
+    let changed = 0;
+    APP.nodes.forEach(n => { if (applyFreeModeToNode(n)) { changed++; updateNodeEl(n.id); } });
+    if (APP.sel) renderPropsPanel(APP.sel);
+    saveUndo();
+    if (!silent) {
+        showToast(`💰 Free Mode ON — ${changed} node${changed === 1 ? '' : 's'} switched to free providers.`, 'success', 4000);
+        logAdd(`[FreeMode] 💰 Enabled — ${changed} node(s) set to zero-cost providers (Gemini free / Kokoro local / Pollinations / ComfyUI local).`, 'success');
+    }
+}
+
 const WF_ITEMS = [
     { icon:'⚡', name:'Full Viral Shorts Pipeline', meta:'11 nodes · Auto Trigger + Script + TTS + Video', status:'active' },
     { icon:'🧠', name:'AI News Intelligence Synthesizer', meta:'5 nodes · Extract Viral Angle + Hook + Video', status:'active' },
@@ -198,6 +245,7 @@ const APP = {
     execRunning:false,
     logCount:   0,
     nextId:     1,
+    freeMode:   false,   // 💰 when on, nodes use zero-cost providers (see FREE_MODE_PRESETS)
     consoleCollapsed: false,
     undoStack:  [],
 };
@@ -305,6 +353,7 @@ function cacheDOM() {
         btnDownloadModalVideo: g('btnDownloadModalVideo'),
         // Toast
         toastContainer: g('toastContainer'),
+        btnFreeMode:     g('btnFreeMode'),
         // API Keys Configuration Modal
         btnOpenApiKeysModal: g('btnOpenApiKeysModal'),
         apiKeysConfigModal:  g('apiKeysConfigModal'),
@@ -461,6 +510,7 @@ function addNode(type, wx, wy) {
         config:   {},
     };
     APP.nodes.push(node);
+    if (APP.freeMode) applyFreeModeToNode(node);
     renderNodeEl(node);
     hideCanvasHint();
     saveUndo();
@@ -3533,6 +3583,7 @@ async function saveApiKeys() {
 }
 
 function initApiKeysManager() {
+    D.btnFreeMode?.addEventListener('click', () => setFreeMode(!APP.freeMode));
     D.btnOpenApiKeysModal?.addEventListener('click', openApiKeysModal);
     D.apiKeysModalClose?.addEventListener('click', closeApiKeysModal);
     D.btnCancelApiKeys?.addEventListener('click', closeApiKeysModal);
