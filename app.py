@@ -400,6 +400,196 @@ def retry_workflow(run_id):
         "message": "Workflow retry initiated successfully."
     })
 
+
+# ── Batch Render Queue ─────────────────────────────────────────────────────
+# Serial FIFO queue so users can line up N videos (e.g. overnight) instead of
+# running one workflow at a time. One daemon worker pulls items in order and
+# reuses _async_workflow_worker synchronously per item.
+import queue as _queue_mod
+
+_render_queue = _queue_mod.Queue()
+_queue_items = {}
+_queue_lock = threading.Lock()
+_queue_worker_started = False
+
+
+def _ensure_queue_worker():
+    global _queue_worker_started
+    if _queue_worker_started:
+        return
+    _queue_worker_started = True
+
+    def _worker():
+        while True:
+            qid, run_id, payload = _render_queue.get()
+            try:
+                with _queue_lock:
+                    if qid in _queue_items:
+                        _queue_items[qid]['status'] = 'running'
+                        _queue_items[qid]['run_id'] = run_id
+                        _queue_items[qid]['started_at'] = datetime.datetime.utcnow().isoformat()
+                with _runs_lock:
+                    if run_id in _workflow_runs:
+                        _workflow_runs[run_id]['status'] = 'running'
+                _async_workflow_worker(run_id, payload)
+                with _queue_lock:
+                    if qid in _queue_items:
+                        _queue_items[qid]['status'] = _workflow_runs.get(run_id, {}).get('status', 'done')
+                        _queue_items[qid]['finished_at'] = datetime.datetime.utcnow().isoformat()
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                with _queue_lock:
+                    if qid in _queue_items:
+                        _queue_items[qid]['status'] = 'error'
+                        _queue_items[qid]['error'] = str(e)
+            finally:
+                _render_queue.task_done()
+
+    threading.Thread(target=_worker, daemon=True).start()
+    print("[Queue] Batch render worker started.", flush=True)
+
+
+def _enqueue_payload(payload, label=None):
+    """Preflight-gate + enqueue one workflow payload. Returns (qid, run_id) or raises."""
+    import uuid
+    from src.backend.connection_tests import preflight_workflow
+    check = preflight_workflow(payload)
+    if not check["can_start"]:
+        failed = "; ".join(f"{f['node_type']}: {f['message']}" for f in check["failed"])
+        raise ValueError(f"Preflight blocked: {failed}")
+
+    run_id = str(uuid.uuid4())
+    qid = str(uuid.uuid4())[:8]
+    topic = label or (payload.get('article') or {}).get('title') or payload.get('name') or 'Queued Workflow'
+    with _runs_lock:
+        _workflow_runs[run_id] = {
+            'run_id': run_id,
+            'status': 'queued',
+            'topic': topic,
+            'payload': payload,
+            'nodes': {},
+            'results': {},
+            'logs': ["Queued — waiting for earlier items to finish..."],
+            'created_at': datetime.datetime.utcnow().isoformat()
+        }
+    with _queue_lock:
+        _queue_items[qid] = {
+            'qid': qid,
+            'run_id': run_id,
+            'label': topic,
+            'status': 'queued',
+            'created_at': datetime.datetime.utcnow().isoformat()
+        }
+    _render_queue.put((qid, run_id, payload))
+    _ensure_queue_worker()
+    return qid, run_id
+
+
+@app.route('/api/workflow/queue', methods=['GET'])
+@login_required
+def list_queue():
+    with _queue_lock:
+        items = sorted(_queue_items.values(), key=lambda x: x['created_at'])
+    return jsonify({"queue": items, "pending": _render_queue.qsize()})
+
+
+@app.route('/api/workflow/queue', methods=['POST'])
+@login_required
+def enqueue_workflow():
+    data = request.get_json() or {}
+    payloads = data.get('payloads')
+    if payloads is None:
+        single = data.get('payload')
+        if not single:
+            return jsonify({"status": "error", "message": "Provide 'payload' or 'payloads'."}), 400
+        payloads = [single]
+    labels = data.get('labels') or []
+
+    queued, blocked = [], []
+    for i, p in enumerate(payloads):
+        try:
+            qid, run_id = _enqueue_payload(p, label=labels[i] if i < len(labels) else None)
+            queued.append({"qid": qid, "run_id": run_id})
+        except ValueError as ve:
+            blocked.append({"index": i, "error": str(ve)})
+        except Exception as e:
+            blocked.append({"index": i, "error": str(e)})
+
+    status = "queued" if queued else "blocked"
+    return jsonify({"status": status, "queued": queued, "blocked": blocked,
+                    "pending": _render_queue.qsize()})
+
+
+@app.route('/api/workflow/queue/<qid>', methods=['DELETE'])
+@login_required
+def dequeue_workflow(qid):
+    with _queue_lock:
+        item = _queue_items.get(qid)
+        if not item:
+            return jsonify({"status": "error", "message": "Queue item not found."}), 404
+        if item['status'] != 'queued':
+            return jsonify({"status": "error",
+                            "message": f"Cannot remove item with status '{item['status']}'."}), 400
+        del _queue_items[qid]
+    # Remove from the FIFO (rebuild without this qid)
+    kept = []
+    try:
+        while True:
+            kept.append(_render_queue.get_nowait())
+    except _queue_mod.Empty:
+        pass
+    for entry in kept:
+        if entry[0] != qid:
+            _render_queue.put(entry)
+        else:
+            _render_queue.task_done()
+            with _runs_lock:
+                _workflow_runs.pop(entry[1], None)
+    return jsonify({"status": "removed", "qid": qid})
+
+
+# ── Single-Node Preview ────────────────────────────────────────────────────
+# Run ONE node standalone (no full pipeline) for fast quality iteration:
+# preview a script, an image, a voiceover, a thumbnail...
+# Body: { node: {id, type, data?, config?}, state?: {...}, signal?: {...} }
+@app.route('/api/workflow/run-node', methods=['POST'])
+@login_required
+def run_single_node():
+    data = request.get_json() or {}
+    node = data.get('node')
+    if not node or not node.get('type'):
+        return jsonify({"status": "error", "message": "Provide node {id, type, data/config}."}), 400
+    node = dict(node)
+    node.setdefault('id', 'preview-node')
+
+    try:
+        from src.engine.orchestrator import WorkflowEngine
+        engine = WorkflowEngine({"nodes": [node], "edges": []})
+
+        # Seed state: explicit state wins, then the active signal (topic etc.)
+        seed = dict(data.get('state') or {})
+        signal = data.get('signal') or {}
+        if signal.get('title'):
+            seed.setdefault('topic_title', signal['title'])
+            seed.setdefault('topic', signal['title'])
+            seed.setdefault('article_url', signal.get('link') or '')
+            seed.setdefault('image_url', signal.get('image_url') or '')
+            try:
+                seed.setdefault('viral_score', float(signal.get('score') or 90))
+            except Exception:
+                seed.setdefault('viral_score', 90.0)
+        for k, v in seed.items():
+            engine.state.set(f"seed:{k}", {"value": v, k: v})
+
+        engine.execute_node(node)
+        result = engine.state.get(node['id']) or {}
+        return jsonify({"status": "preview-ok", "node_type": node.get('type'), "result": result})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route('/api/workflow/status/<run_id>')
 @login_required
 def get_workflow_status(run_id):

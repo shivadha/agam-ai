@@ -262,6 +262,9 @@
                         <span class="run-icon">▶</span> Start Workflow
                     </button>
                     <button class="btn-stop hidden" id="btnStop"><span>⏹</span> Stop</button>
+                    <button class="btn-tb" id="btnOpenQueue" title="Batch render queue — line up multiple videos">
+                        🧾 Queue <span id="queueCountBadge" class="hidden" style="background:#f59e0b;color:#000;font-size:0.65rem;font-weight:800;border-radius:8px;padding:1px 7px;margin-left:4px;">0</span>
+                    </button>
                 </div>
             </div>
 
@@ -552,6 +555,22 @@
             <!-- Signal Picker Body -->
             <div id="signalPickerBody" style="padding: 1.5rem; overflow-y: auto; flex: 1; max-height: 55vh;">
                 <div class="modal-loader"><div class="spinner"></div><p>Loading signals...</p></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Batch Render Queue Modal ── -->
+    <div class="modal-overlay hidden" id="queueModal">
+        <div class="modal-box" style="max-width: 640px; max-height: 80vh; background: #0b0f19; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; display: flex; flex-direction: column;">
+            <div class="modal-header" style="padding: 1.25rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h2 style="font-size: 1.2rem; font-weight: 700; color: #fff;">🧾 Batch Render Queue</h2>
+                    <p style="font-size: 0.8rem; color: #94a3b8; margin-top: 2px;">Videos render one at a time, in order — queue them overnight</p>
+                </div>
+                <button class="modal-close" id="queueModalClose">✕</button>
+            </div>
+            <div id="queueModalBody" style="padding: 1.25rem 1.5rem; overflow-y: auto; flex: 1;">
+                <div style="text-align:center;color:#94a3b8;">Loading…</div>
             </div>
         </div>
     </div>

@@ -280,7 +280,8 @@ def assemble_cinematic_video(
     sfx_timeline: list = None,
     viral_score: float = 85.0,
     topic_title: str = "PulseForge Video",
-    editing_style: str = "auto"
+    editing_style: str = "auto",
+    word_timings_path: str = None
 ) -> str:
     """
     Master video assembly function powered by the Viral Reel Intelligence Brain.
@@ -439,63 +440,83 @@ def assemble_cinematic_video(
     final_video = final_video.with_audio(mixed_audio)
 
     # 4. Word-by-Word Bouncing Karaoke Subtitles (Alex Hormozi / CapCut Style at Safe-Zone y=1120)
-    subs = parse_srt(subtitle_path)
+    # Real speech timings (faster-whisper) are preferred; falls back to the
+    # estimated even-division timings from the SRT when unavailable.
+    # Each event: (words_list, active_word_index, start, end)
+    caption_events = []
+    try:
+        real_words = []
+        if word_timings_path:
+            try:
+                from .captions import load_word_timings
+                real_words = load_word_timings(word_timings_path)
+            except Exception as wt_err:
+                print(f"[video_assembler] Word-timing load note: {wt_err}")
+
+        if real_words:
+            from .captions import chunk_words
+            for chunk in chunk_words(real_words):
+                for w_idx, (_w, w_start, w_end) in enumerate(chunk["timings"]):
+                    caption_events.append((chunk["words"], w_idx, w_start, w_end))
+            print(f"[video_assembler] Karaoke synced to {len(real_words)} real word timings.")
+        else:
+            subs = parse_srt(subtitle_path)
+            for sub in subs:
+                raw = sub['text'].strip()
+                if not raw:
+                    continue
+                words = raw.split()
+                seg_start, seg_end = sub['start'], sub['end']
+                seg_dur = max(0.25, seg_end - seg_start)
+                word_dur = seg_dur / max(1, len(words))
+                for w_idx in range(len(words)):
+                    w_start = seg_start + w_idx * word_dur
+                    w_end = seg_start + (w_idx + 1) * word_dur if w_idx < len(words) - 1 else seg_end
+                    caption_events.append((words, w_idx, w_start, w_end))
+    except Exception as e:
+        print(f"[video_assembler] Caption event build note: {e}")
+
     overlay_clips = []
     font_path = "C:/Windows/Fonts/impact.ttf" if os.path.exists("C:/Windows/Fonts/impact.ttf") else ("C:/Windows/Fonts/arialbd.ttf" if os.path.exists("C:/Windows/Fonts/arialbd.ttf") else "Arial")
     bp_primary = blueprint.get("caption_color", "#FFE600")
     bp_accent = blueprint.get("caption_accent", "#00FFAA")
     karaoke_colors = [bp_primary, bp_accent, "#38BDF8", "#FF3366", "#A855F7"]
 
-    for sub in subs:
+    for (words, w_idx, w_start, w_end) in caption_events:
         try:
-            raw_text = sub['text'].strip()
-            if not raw_text:
-                continue
-
-            words = raw_text.split()
-            seg_start = sub['start']
-            seg_end = sub['end']
-            seg_dur = max(0.25, seg_end - seg_start)
-            num_words = len(words)
-            word_dur = seg_dur / max(1, num_words)
             active_color = random.choice(karaoke_colors)
 
-            # Generate word-by-word bouncing highlight frames for the chunk
-            for w_idx, active_word in enumerate(words):
-                w_start = seg_start + w_idx * word_dur
-                w_end = seg_start + (w_idx + 1) * word_dur if w_idx < num_words - 1 else seg_end
-                
-                # Active word gets uppercase emphasis and glowing brackets / color
-                display_parts = []
-                for idx_i, w in enumerate(words):
-                    if idx_i == w_idx:
-                        display_parts.append(f"★ {w.upper()} ★")
-                    else:
-                        display_parts.append(w.upper())
-                
-                if len(display_parts) > 4:
-                    mid = len(display_parts) // 2
-                    formatted_line = " ".join(display_parts[:mid]) + "\n" + " ".join(display_parts[mid:])
+            # Active word gets uppercase emphasis and glowing brackets / color
+            display_parts = []
+            for idx_i, w in enumerate(words):
+                if idx_i == w_idx:
+                    display_parts.append(f"\u2605 {w.upper()} \u2605")
                 else:
-                    formatted_line = " ".join(display_parts)
+                    display_parts.append(w.upper())
 
-                font_size = 56 if len(formatted_line) < 20 else 48
+            if len(display_parts) > 4:
+                mid = len(display_parts) // 2
+                formatted_line = " ".join(display_parts[:mid]) + chr(10) + " ".join(display_parts[mid:])
+            else:
+                formatted_line = " ".join(display_parts)
 
-                txt_clip = TextClip(
-                    font=font_path,
-                    text=formatted_line,
-                    font_size=font_size,
-                    color=active_color,
-                    stroke_color="black",
-                    stroke_width=5.0,
-                    method="caption",
-                    size=(860, None),
-                    text_align="center"
-                )
-                txt_clip = txt_clip.with_start(w_start).with_end(w_end)
-                # Golden Safe-Zone: y = 1120 (Centered, strictly clear of YouTube Shorts overlay UI)
-                txt_clip = txt_clip.with_position(('center', 1120))
-                overlay_clips.append(txt_clip)
+            font_size = 56 if len(formatted_line) < 20 else 48
+
+            txt_clip = TextClip(
+                font=font_path,
+                text=formatted_line,
+                font_size=font_size,
+                color=active_color,
+                stroke_color="black",
+                stroke_width=5.0,
+                method="caption",
+                size=(860, None),
+                text_align="center"
+            )
+            txt_clip = txt_clip.with_start(w_start).with_end(w_end)
+            # Golden Safe-Zone: y = 1120 (Centered, strictly clear of YouTube Shorts overlay UI)
+            txt_clip = txt_clip.with_position(('center', 1120))
+            overlay_clips.append(txt_clip)
         except Exception as e:
             print(f"[video_assembler] Karaoke subtitle rendering note: {e}")
 

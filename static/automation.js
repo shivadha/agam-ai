@@ -21,6 +21,11 @@ function escHtml(s) {
 // 1. CONSTANTS, STATE & NODE DEFINITIONS
 // ──────────────────────────────────────────────────────────────
 let SELECTED_SIGNAL = null;
+// ── Batch render queue state ──
+let BATCH_SIGNALS = [];
+let SIGNAL_PICKER_ITEMS = [];
+let SIGNAL_PICKER_TAB = 'news';
+let queuePollTimer = null;
 
 
 const NODE_W  = 210;    // node card width (px)
@@ -57,6 +62,7 @@ const NDEFS = {
     // ── Media
     'tts':              { label:'Text To Speech',        icon:'🎙',  cat:'media',    color:'#10b981', execMs:5200 },
     'gen-image':        { label:'Generate Image',        icon:'🖼',  cat:'media',    color:'#10b981', execMs:6100 },
+    'gen-thumbnail':    { label:'Generate Thumbnail',    icon:'📸',  cat:'media',    color:'#f59e0b', execMs:3200 },
     'img-to-video':     { label:'Image To Video',        icon:'🎞',  cat:'media',    color:'#10b981', execMs:8500 },
     'bg-music':         { label:'Background Music',      icon:'🎵',  cat:'media',    color:'#0d9488', execMs:1500 },
     'gen-sfx':          { label:'Sound Effects',         icon:'💥',  cat:'media',    color:'#0891b2', execMs:1200 },
@@ -131,6 +137,7 @@ const NODE_CONFIGS = {
         { key:'voice',    label:'Voice',         type:'select', opts:['Kokoro-82M (af_heart) [Local Free]','Kokoro-82M (am_adam) [Local Free]','en-US-ChristopherNeural (Edge)','en-US-JennyNeural (Edge)','en-GB-RyanNeural (Edge)'], def:'Kokoro-82M (af_heart) [Local Free]' },
         { key:'speed',    label:'Speed',         type:'range',  min:0.5, max:2.0, step:0.1, def:1.1 },
         { key:'language', label:'Language',      type:'select', opts:['English','Hindi','Spanish','French','Japanese'], def:'English' },
+        { key:'hindi_dub', label:'Hindi Dub (2nd audio track — English stays primary)', type:'toggle', def:false },
     ],
     'gen-image': [
         { key:'model',    label:'Image Model',   type:'select', opts:['HuggingFace FLUX.1 [Free]','Pollinations FLUX [Free]','ComfyUI (Local GPU)','DALL-E 3','Gemini (Imagen 3)'], def:'HuggingFace FLUX.1 [Free]' },
@@ -138,6 +145,11 @@ const NODE_CONFIGS = {
         { key:'style',    label:'Visual Style',  type:'select', opts:['Cinematic 8K','Realistic','Artistic','Anime','Dark Moody'], def:'Cinematic 8K' },
         { key:'ratio',    label:'Aspect Ratio',  type:'select', opts:['9:16 (Shorts)','16:9 (YouTube)','1:1 (Square)'], def:'9:16 (Shorts)' },
         { key:'count',    label:'Images per Scene', type:'select', opts:['1','2'], def:'1' },
+    ],
+    'gen-thumbnail': [
+        { key:'style',       label:'Thumbnail Style', type:'select', opts:['Bold Viral','Dark Moody','Minimal'], def:'Bold Viral' },
+        { key:'text_source', label:'Overlay Text',    type:'select', opts:['Hook (punchiest)','Video Title','Custom Text'], def:'Hook (punchiest)' },
+        { key:'custom_text', label:'Custom Text',     type:'text', placeholder:'Leave blank to use hook/title', def:'' },
     ],
     'img-to-video': [
         { key:'provider', label:'AI Video Provider', type:'select', opts:['ComfyUI (Local Wan 2.1 / LTX) [Free GPU]','HuggingFace SVD [Free Cloud]','MiniMax-H3 (Free/Cloud)','fal.ai','Kling','Luma','Runway'], def:'ComfyUI (Local Wan 2.1 / LTX) [Free GPU]' },
@@ -209,7 +221,7 @@ function setFreeMode(on, silent) {
     }
     let changed = 0;
     APP.nodes.forEach(n => { if (applyFreeModeToNode(n)) { changed++; updateNodeEl(n.id); } });
-    if (APP.sel) renderPropsPanel(APP.sel);
+    if (APP.sel) showPropsContent(APP.sel);
     saveUndo();
     if (!silent) {
         showToast(`💰 Free Mode ON — ${changed} node${changed === 1 ? '' : 's'} switched to free providers.`, 'success', 4000);
@@ -277,6 +289,7 @@ function cacheDOM() {
         wfpEta:         g('wfpEta'),
         btnRun:         g('btnRun'),
         btnStop:        g('btnStop'),
+        btnOpenQueue:   g('btnOpenQueue'),
         btnSave:        g('btnSave'),
         btnLoad:        g('btnLoad'),
         btnClearCanvas: g('btnClearCanvas'),
@@ -908,6 +921,10 @@ function showPropsContent(nodeId) {
                 <span>⚡</span> Test Live Connection
             </button>
             <div id="pc-conn-result-${nodeId}" style="margin-top:6px;display:none;"></div>
+            <button class="pc-btn-preview-node" id="pc-preview-btn-${nodeId}" onclick="previewSingleNode('${nodeId}')" style="width:100%;margin-top:6px;padding:8px 12px;background:linear-gradient(135deg,rgba(139,92,246,0.12),rgba(59,130,246,0.12));border:1px solid rgba(139,92,246,0.4);border-radius:7px;color:#a78bfa;font-size:0.76rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;transition:all 0.2s;">
+                <span>▶</span> Preview This Node Only
+            </button>
+            <div id="pc-preview-result-${nodeId}" style="margin-top:6px;display:none;"></div>
         </div>
         ${resultSection}
         <div class="pc-actions">
@@ -985,6 +1002,232 @@ function topoSort() {
     }
     APP.nodes.forEach(n => { if (!seen.has(n.id)) result.push(n.id); });
     return result;
+}
+
+function escHtml(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function mediaUrlFor(absPath) {
+    if (!absPath) return '';
+    const fname = String(absPath).split(/[\\/]/).pop();
+    return `/output/${encodeURIComponent(fname)}`;
+}
+
+// ── Single-node preview: run ONE node standalone and render its result ──
+async function previewSingleNode(nodeId) {
+    const node = APP.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+    const box = document.getElementById('pc-preview-result-' + nodeId);
+    const btn = document.getElementById('pc-preview-btn-' + nodeId);
+    if (!box) return;
+    box.style.display = 'block';
+    box.innerHTML = `<div style="padding:12px;text-align:center;color:#94a3b8;font-size:0.78rem;"><div style="font-size:20px;animation:spin 1s linear infinite;display:inline-block;">⏳</div><div style="margin-top:6px;">Running node preview...</div></div>`;
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch('/api/workflow/run-node', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+                node: { id: node.id, type: node.type, data: node.data || {}, config: node.config || {} },
+                signal: SELECTED_SIGNAL || {}
+            })
+        });
+        const data = await res.json();
+        if (data.status === 'error') throw new Error(data.message || 'Preview failed');
+        box.innerHTML = renderPreviewResult(data.result || {}, data.node_type);
+        showToast('▶ Node preview complete', 'success', 2500);
+    } catch (e) {
+        box.innerHTML = `<div style="padding:10px;color:#f87171;font-size:0.78rem;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.3);border-radius:8px;">❌ Preview failed: ${escHtml(e.message)}</div>`;
+        showToast(`Preview failed: ${e.message}`, 'error', 5000);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+function renderPreviewResult(r, nodeType) {
+    const parts = [];
+    const wrap = (title, inner) => `<div style="margin-top:8px;padding:10px;background:rgba(139,92,246,0.07);border:1px solid rgba(139,92,246,0.3);border-radius:8px;">
+        <div style="font-size:0.72rem;font-weight:700;color:#a78bfa;margin-bottom:6px;">${title}</div>${inner}</div>`;
+
+    if (r.status === 'error') {
+        return wrap('❌ Node error', `<div style="color:#f87171;font-size:0.78rem;">${escHtml(r.error || r.message || 'Unknown error')}</div>`);
+    }
+    // Images (gen-image returns image_paths per scene or images list)
+    const imgs = [];
+    (r.scenes || []).forEach(s => {
+        (s.image_paths || []).forEach(p => imgs.push(p));
+        if (s.image_path) imgs.push(s.image_path);
+    });
+    (r.images || r.image_paths || []).forEach(p => imgs.push(p));
+    if (r.thumbnail_path) imgs.push(r.thumbnail_path);
+    if (r.image_path) imgs.push(r.image_path);
+    [...new Set(imgs)].slice(0, 6).forEach(p => {
+        parts.push(`<img src="${mediaUrlFor(p)}" style="width:100%;border-radius:6px;margin-top:6px;border:1px solid rgba(255,255,255,0.1);" onerror="this.style.display='none'">`);
+    });
+    if (r.thumbnail_path && !imgs.length) parts.push(`<img src="${mediaUrlFor(r.thumbnail_path)}" style="width:100%;border-radius:6px;">`);
+    // Audio
+    if (r.audio_path) {
+        parts.push(wrap('🎙 Voiceover (English primary)', `<audio src="${mediaUrlFor(r.audio_path)}" controls style="width:100%;"></audio>`
+            + (r.hindi_audio_path ? `<div style="margin-top:6px;font-size:0.72rem;color:#94a3b8;">🇮🇳 Hindi dub track also generated</div><audio src="${mediaUrlFor(r.hindi_audio_path)}" controls style="width:100%;margin-top:4px;"></audio>` : '')));
+    }
+    // Video
+    if (r.video_path) {
+        parts.push(wrap('🎬 Video' + (r.dual_audio ? ' (EN + HI audio tracks)' : ''), `<video src="${mediaUrlFor(r.video_path)}" controls style="width:100%;border-radius:6px;background:#000;"></video>`));
+    }
+    // Script / text outputs
+    const script = r.script || r.translated_script || r.narration;
+    if (script) {
+        const txt = String(script).slice(0, 1200);
+        parts.push(wrap('📝 Script', `<div style="font-size:0.74rem;color:#e2e8f0;white-space:pre-wrap;max-height:220px;overflow:auto;">${escHtml(txt)}${String(script).length > 1200 ? '…' : ''}</div>`));
+    }
+    if (r.title) parts.push(wrap('📌 Title', `<div style="font-size:0.8rem;color:#f1f5f9;font-weight:600;">${escHtml(r.title)}</div>`));
+    if (r.hook) parts.push(wrap('🪝 Hook', `<div style="font-size:0.78rem;color:#f1f5f9;">${escHtml(r.hook)}</div>`));
+    if (r.word_timings_path) parts.push(`<div style="font-size:0.7rem;color:#00FFAA;margin-top:6px;">✓ Real word-level caption timings captured</div>`);
+    if (!parts.length) {
+        const keys = Object.keys(r).filter(k => !['status','node_type'].includes(k));
+        parts.push(wrap('Result', `<div style="font-size:0.72rem;color:#94a3b8;">${keys.length ? 'Keys: ' + escHtml(keys.join(', ')) : 'Node ran with no displayable output.'}</div>`));
+    }
+    return parts.join('');
+}
+
+// ── Build a runnable workflow payload for a given signal (no canvas mutation) ──
+function buildWorkflowPayload(signal) {
+    const nodes = APP.nodes.map(n => ({
+        id: n.id, type: n.type,
+        data: JSON.parse(JSON.stringify(n.data || {})),
+        config: JSON.parse(JSON.stringify(n.config || {}))
+    }));
+    const selectedStyle = document.getElementById('wfStyleSelect')?.value || 'cinema_8k';
+    const triggerNode = nodes.find(n => n.type === 'article-trigger' || n.type === 'manual-trigger' || n.id === 'n1');
+    if (triggerNode) {
+        triggerNode.config = triggerNode.config || {};
+        triggerNode.config.topic = signal.title;
+        triggerNode.config.article_url = signal.link || '';
+        triggerNode.config.category = signal.topic || 'General';
+        triggerNode.config.viral_score = signal.score || 90;
+        triggerNode.config.image_url = signal.image_url || '';
+    }
+    nodes.forEach(n => {
+        n.data = { ...(n.data || {}), ...(n.config || {}), visual_style: selectedStyle };
+        n.config = { ...(n.config || {}), visual_style: selectedStyle };
+    });
+    return {
+        name: signal.title || D.wfNameInput?.value || 'YouTube Content Pipeline',
+        visual_style: selectedStyle,
+        article: {
+            title: signal.title, topic: signal.topic || 'AI & Tech',
+            score: signal.score || 95, link: signal.link || '',
+            image_url: signal.image_url || ''
+        },
+        nodes,
+        edges: APP.conns.map(c => ({ source: c.from, target: c.to }))
+    };
+}
+
+// ── Batch queue: enqueue 1..N videos built from the current canvas ──
+async function queueSignals(signals) {
+    if (!signals || !signals.length) return;
+    if (!APP.nodes.length) { showToast('Add some nodes to the canvas first!', 'warning'); return; }
+    const payloads = signals.map(s => buildWorkflowPayload(s));
+    showToast(`🎬 Queueing ${payloads.length} video${payloads.length === 1 ? '' : 's'}...`, 'info', 3000);
+    logAdd(`[Queue] Enqueueing ${payloads.length} video(s)...`, 'info');
+    try {
+        const res = await fetch('/api/workflow/queue', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ payloads })
+        });
+        const data = await res.json();
+        const nq = (data.queued || []).length;
+        const nb = (data.blocked || []).length;
+        if (nq) {
+            showToast(`✅ ${nq} video${nq === 1 ? '' : 's'} queued — rendering one by one in the background.`, 'success', 6000);
+            logAdd(`[Queue] ✅ ${nq} video(s) queued.`, 'success');
+        }
+        if (nb) {
+            const first = data.blocked[0];
+            showToast(`🚫 ${nb} blocked by preflight: ${first.error}`, 'error', 8000);
+            logAdd(`[Queue] ❌ ${nb} blocked: ${first.error}`, 'error');
+        }
+        BATCH_SIGNALS = [];
+        closeSignalPicker();
+        updateQueueBadge();
+        openQueueModal();
+    } catch (e) {
+        showToast(`Queue failed: ${e.message}`, 'error');
+    }
+}
+
+async function updateQueueBadge() {
+    try {
+        const res = await fetch('/api/workflow/queue', { credentials: 'include' });
+        const data = await res.json();
+        const active = (data.queue || []).filter(q => ['queued', 'running'].includes(q.status)).length;
+        const badge = document.getElementById('queueCountBadge');
+        if (badge) {
+            badge.textContent = active;
+            badge.classList.toggle('hidden', active === 0);
+        }
+    } catch (e) { /* silent */ }
+}
+
+function openQueueModal() {
+    const modal = document.getElementById('queueModal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    refreshQueueModal();
+    if (queuePollTimer) clearInterval(queuePollTimer);
+    queuePollTimer = setInterval(refreshQueueModal, 4000);
+}
+
+function closeQueueModal() {
+    document.getElementById('queueModal')?.classList.add('hidden');
+    if (queuePollTimer) { clearInterval(queuePollTimer); queuePollTimer = null; }
+}
+
+async function refreshQueueModal() {
+    const body = document.getElementById('queueModalBody');
+    if (!body || document.getElementById('queueModal').classList.contains('hidden')) return;
+    try {
+        const res = await fetch('/api/workflow/queue', { credentials: 'include' });
+        const data = await res.json();
+        const items = data.queue || [];
+        if (!items.length) {
+            body.innerHTML = `<div style="text-align:center;padding:36px;color:#64748b;">
+                <div style="font-size:32px;margin-bottom:8px;">🧾</div>
+                <p style="font-size:0.9rem;">Queue is empty.<br>Pick signals from the 📰 picker and hit <b>🎬 Queue</b> to line up videos.</p></div>`;
+            return;
+        }
+        const statusStyle = (s) => ({
+            queued:  'background:rgba(245,158,11,0.12);color:#fbbf24;border:1px solid rgba(245,158,11,0.35);',
+            running: 'background:rgba(56,189,248,0.12);color:#38bdf8;border:1px solid rgba(56,189,248,0.35);',
+            success: 'background:rgba(0,255,170,0.1);color:#00FFAA;border:1px solid rgba(0,255,170,0.3);',
+            partial: 'background:rgba(168,85,247,0.12);color:#a78bfa;border:1px solid rgba(168,85,247,0.35);',
+            error:   'background:rgba(248,113,113,0.1);color:#f87171;border:1px solid rgba(248,113,113,0.3);',
+        }[s] || 'background:rgba(255,255,255,0.06);color:#94a3b8;border:1px solid rgba(255,255,255,0.12);');
+        body.innerHTML = items.map(q => `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;margin-bottom:8px;">
+                <div style="flex:1;min-width:0;">
+                    <div style="font-size:0.84rem;font-weight:600;color:#f1f5f9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(q.label || 'Untitled')}</div>
+                    <div style="font-size:0.7rem;color:#64748b;margin-top:2px;">${q.created_at ? escHtml(q.created_at.slice(0,16).replace('T',' ')) : ''}${q.error ? ' — ' + escHtml(q.error.slice(0,80)) : ''}</div>
+                </div>
+                <span style="font-size:0.7rem;font-weight:700;padding:3px 10px;border-radius:6px;${statusStyle(q.status)}">${escHtml(q.status)}</span>
+                ${q.status === 'queued' ? `<button onclick="removeQueueItem('${q.qid}')" title="Remove from queue" style="padding:5px 9px;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.3);border-radius:6px;color:#f87171;cursor:pointer;font-size:0.75rem;">✕</button>` : ''}
+            </div>`).join('');
+        updateQueueBadge();
+    } catch (e) {
+        body.innerHTML = `<div style="text-align:center;color:#f87171;padding:20px;">Failed to load queue: ${escHtml(e.message)}</div>`;
+    }
+}
+
+async function removeQueueItem(qid) {
+    try {
+        await fetch(`/api/workflow/queue/${qid}`, { method: 'DELETE', credentials: 'include' });
+        refreshQueueModal();
+    } catch (e) { showToast(`Remove failed: ${e.message}`, 'error'); }
 }
 
 async function runWorkflow() {
@@ -2580,6 +2823,7 @@ function init() {
     try { initAudioLibrary(); } catch(e) { console.error('initAudioLibrary error:', e); }
     try { loadDefaultWorkflow(); } catch(e) { console.error('loadDefaultWorkflow error:', e); }
     try { initSignalManager(); } catch(e) { console.error('initSignalManager error:', e); }
+    try { updateQueueBadge(); } catch(e) { console.error('queue badge error:', e); }
     try { initApiKeysManager(); } catch(e) { console.error('initApiKeysManager error:', e); }
     try { initAdminSyncHub(); } catch(e) { console.error('initAdminSyncHub error:', e); }
     try { applyTransform(); } catch(e) { console.error('applyTransform error:', e); }
@@ -3244,6 +3488,18 @@ async function loadSignalPickerData(sourceTab = 'news') {
             }
         }
 
+        SIGNAL_PICKER_ITEMS = items;
+        SIGNAL_PICKER_TAB = sourceTab;
+
+        const batchBar = BATCH_SIGNALS.length ? `
+            <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.35);border-radius:10px;padding:10px 14px;margin-bottom:14px;">
+                <div style="font-size:0.85rem;color:#fbbf24;font-weight:700;">📦 ${BATCH_SIGNALS.length} signal${BATCH_SIGNALS.length===1?'':'s'} in batch</div>
+                <div style="display:flex;gap:8px;">
+                    <button id="btnClearBatch" style="padding:7px 12px;background:transparent;border:1px solid rgba(255,255,255,0.2);border-radius:7px;color:#94a3b8;font-size:0.78rem;font-weight:600;cursor:pointer;">Clear</button>
+                    <button id="btnQueueBatch" style="padding:7px 14px;background:linear-gradient(135deg,#f59e0b,#ef4444);border:none;border-radius:7px;color:#fff;font-size:0.8rem;font-weight:700;cursor:pointer;">🎬 Queue ${BATCH_SIGNALS.length} Video${BATCH_SIGNALS.length===1?'':'s'}</button>
+                </div>
+            </div>` : '';
+
         const gridHTML = items.map((item, idx) => {
             const title = item.title || item.name || 'Untitled Signal';
             const topic = item.topic || item.category || (sourceTab === 'viral' ? 'Viral Video' : 'Tech');
@@ -3251,9 +3507,10 @@ async function loadSignalPickerData(sourceTab = 'news') {
             const image = item.image_url || item.thumbnail || '';
             const link = item.link || item.url || '';
             const cleanTitle = title.replace(/"/g, '&quot;');
+            const inBatch = BATCH_SIGNALS.some(s => s.title === title);
 
             return `
-                <div class="signal-card" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; justify-content: space-between; gap: 12px; transition: all 0.2s ease;">
+                <div class="signal-card" style="background: rgba(255,255,255,0.03); border: 1px solid ${inBatch ? 'rgba(245,158,11,0.5)' : 'rgba(255,255,255,0.08)'}; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; justify-content: space-between; gap: 12px; transition: all 0.2s ease;">
                     <div>
                         ${image ? `<img src="${image}" alt="Thumb" style="width: 100%; height: 110px; object-fit: cover; border-radius: 8px; margin-bottom: 10px; border: 1px solid rgba(255,255,255,0.05);" onerror="this.style.display='none'">` : ''}
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
@@ -3262,33 +3519,78 @@ async function loadSignalPickerData(sourceTab = 'news') {
                         </div>
                         <h4 style="font-size: 0.88rem; font-weight: 600; color: #f1f5f9; line-height: 1.35; margin: 0;">${title}</h4>
                     </div>
-                    <button class="btn-select-this-signal" 
-                            data-title="${cleanTitle}" 
-                            data-topic="${topic}" 
-                            data-score="${score}" 
-                            data-image="${image}" 
-                            data-link="${link}"
-                            style="width: 100%; padding: 8px; background: rgba(0, 255, 170, 0.12); border: 1px solid rgba(0, 255, 170, 0.3); color: #00FFAA; border-radius: 6px; font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all 0.2s;">
-                        ✓ Select as Input
-                    </button>
+                    <div style="display:flex;flex-direction:column;gap:6px;">
+                        <button class="btn-select-this-signal"
+                                data-title="${cleanTitle}"
+                                data-topic="${topic}"
+                                data-score="${score}"
+                                data-image="${image}"
+                                data-link="${link}"
+                                style="width: 100%; padding: 8px; background: rgba(0, 255, 170, 0.12); border: 1px solid rgba(0, 255, 170, 0.3); color: #00FFAA; border-radius: 6px; font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all 0.2s;">
+                            ✓ Select as Input
+                        </button>
+                        <div style="display:flex;gap:6px;">
+                            <button class="btn-queue-this-signal"
+                                    data-title="${cleanTitle}"
+                                    data-topic="${topic}"
+                                    data-score="${score}"
+                                    data-image="${image}"
+                                    data-link="${link}"
+                                    title="Render this video in the background queue"
+                                    style="flex:1; padding:7px; background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.35); color: #fbbf24; border-radius: 6px; font-size: 0.78rem; font-weight: 700; cursor: pointer;">
+                                🎬 Queue
+                            </button>
+                            <button class="btn-batch-this-signal"
+                                    data-title="${cleanTitle}"
+                                    data-topic="${topic}"
+                                    data-score="${score}"
+                                    data-image="${image}"
+                                    data-link="${link}"
+                                    title="${inBatch ? 'Remove from batch' : 'Add to batch render'}"
+                                    style="padding:7px 10px; background: ${inBatch ? 'rgba(245,158,11,0.25)' : 'rgba(255,255,255,0.05)'}; border: 1px solid rgba(255,255,255,0.15); color: ${inBatch ? '#fbbf24' : '#94a3b8'}; border-radius: 6px; font-size: 0.78rem; font-weight: 700; cursor: pointer;">
+                                ${inBatch ? '✓ Batch' : '＋ Batch'}
+                            </button>
+                        </div>
+                    </div>
                 </div>`;
         }).join('');
 
-        body.innerHTML = `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px;">${gridHTML}</div>`;
+        body.innerHTML = batchBar + `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px;">${gridHTML}</div>`;
+
+        document.getElementById('btnQueueBatch')?.addEventListener('click', () => queueSignals([...BATCH_SIGNALS]));
+        document.getElementById('btnClearBatch')?.addEventListener('click', () => { BATCH_SIGNALS = []; loadSignalPickerData(SIGNAL_PICKER_TAB); });
+
+        const signalFromBtn = (btn) => ({
+            title: btn.dataset.title,
+            topic: btn.dataset.topic,
+            score: parseInt(btn.dataset.score, 10),
+            image_url: btn.dataset.image,
+            link: btn.dataset.link
+        });
 
         // Bind clicks on select buttons
         body.querySelectorAll('.btn-select-this-signal').forEach(btn => {
             btn.addEventListener('click', () => {
-                const signal = {
-                    title: btn.dataset.title,
-                    topic: btn.dataset.topic,
-                    score: parseInt(btn.dataset.score, 10),
-                    image_url: btn.dataset.image,
-                    link: btn.dataset.link
-                };
+                const signal = signalFromBtn(btn);
                 setSignal(signal);
                 closeSignalPicker();
                 showToast(`✓ Workflow bound to: "${signal.title.slice(0, 32)}..."`, 'success');
+            });
+        });
+
+        // Bind clicks on per-card queue buttons (trend → video in one click)
+        body.querySelectorAll('.btn-queue-this-signal').forEach(btn => {
+            btn.addEventListener('click', () => queueSignals([signalFromBtn(btn)]));
+        });
+
+        // Bind batch toggles
+        body.querySelectorAll('.btn-batch-this-signal').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const signal = signalFromBtn(btn);
+                const i = BATCH_SIGNALS.findIndex(s => s.title === signal.title);
+                if (i >= 0) BATCH_SIGNALS.splice(i, 1);
+                else BATCH_SIGNALS.push(signal);
+                loadSignalPickerData(SIGNAL_PICKER_TAB);
             });
         });
     } catch (e) {
@@ -3434,6 +3736,11 @@ function initSignalManager() {
     // Bind buttons
     D.btnOpenSignalPicker?.addEventListener('click', openSignalPicker);
     D.signalPickerClose?.addEventListener('click', closeSignalPicker);
+    D.btnOpenQueue?.addEventListener('click', openQueueModal);
+    document.getElementById('queueModalClose')?.addEventListener('click', closeQueueModal);
+    document.getElementById('queueModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'queueModal') closeQueueModal();
+    });
     D.signalPickerModal?.addEventListener('click', (e) => {
         if (e.target === D.signalPickerModal) closeSignalPicker();
     });

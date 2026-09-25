@@ -242,12 +242,41 @@ class WorkflowEngine:
                 audio_path, vtt_path = generate_audio(script_text, output_path, voice=voice, provider=provider, api_key=api_key)
                 if not audio_path:
                     raise ValueError("Audio generation failed")
-                    
+
+                # ── Real word-level caption timings (best-effort, cached) ──
+                # faster-whisper transcribes the rendered audio so the karaoke
+                # highlight in the assembler syncs with actual speech instead
+                # of evenly-divided estimates. Never blocks the pipeline.
+                word_timings_path = None
+                try:
+                    from src.backend.captions import transcribe_word_timings
+                    words = transcribe_word_timings(audio_path)
+                    if words:
+                        word_timings_path = os.path.splitext(audio_path)[0] + ".words.json"
+                except Exception as cap_err:
+                    print(f"[tts] Word-timing note: {cap_err}")
+
+                # ── Hindi dubbing (English stays the primary audio) ──
+                # Optional per-node toggle: generates a Hindi voiceover that the
+                # assembler muxes as a 2nd audio track (YouTube language picker).
+                hindi_audio_path = None
+                if node_data.get('hindi_dub'):
+                    try:
+                        from src.backend.dubbing import translate_text, generate_hindi_voiceover
+                        print("[tts] Hindi dub enabled — translating + rendering Hindi voiceover...")
+                        script_hi = translate_text(script_text, target="hi")
+                        hindi_out = output_path.replace(".mp3", "_hindi.mp3").replace(".wav", "_hindi.wav")
+                        hindi_audio_path = generate_hindi_voiceover(script_hi, hindi_out)
+                    except Exception as dub_err:
+                        print(f"[tts] Hindi dub note (English audio unaffected): {dub_err}")
+
                 result = {
                     "status": "success",
                     "node_type": node_type,
                     "audio_path": audio_path,
-                    "subtitle_path": vtt_path
+                    "subtitle_path": vtt_path,
+                    "word_timings_path": word_timings_path,
+                    "hindi_audio_path": hindi_audio_path
                 }
                 
             elif node_type in ['image-gen', 'visuals', 'gen-image']:
@@ -316,11 +345,13 @@ class WorkflowEngine:
                     
                 editing_style = node_data.get('editing_style') or self._find_in_state('editing_style') or self.workflow.get('editing_style') or 'auto'
                 output_filename = node_data.get('output_filename', f"video_{node_id}.mp4")
+                word_timings_path = node_data.get('word_timings_path') or self._find_in_state('word_timings_path')
                 video_path = assemble_cinematic_video(
                     audio_path, subtitle_path, scenes, output_filename,
                     music_path=music_path, sfx_timeline=sfx_timeline,
                     viral_score=viral_score, topic_title=topic_title,
-                    editing_style=editing_style
+                    editing_style=editing_style,
+                    word_timings_path=word_timings_path
                 )
                 
                 result = {
@@ -330,7 +361,51 @@ class WorkflowEngine:
                     "saved_locally": True,
                     "output_dir": OUTPUT_DIR
                 }
+
+                # ── Hindi dub: mux as 2nd audio track (English stays default) ──
+                hindi_audio_path = node_data.get('hindi_audio_path') or self._find_in_state('hindi_audio_path')
+                if hindi_audio_path:
+                    try:
+                        from src.backend.dubbing import mux_second_audio_track
+                        dual_path = mux_second_audio_track(video_path, hindi_audio_path)
+                        if dual_path:
+                            result["video_path"] = dual_path
+                            result["dual_audio"] = True
+                    except Exception as mux_err:
+                        print(f"[assembler] Hindi mux note (English video unaffected): {mux_err}")
                 
+            elif node_type in ['gen-thumbnail', 'thumbnail']:
+                from src.backend.thumbnail_gen import generate_thumbnail
+                title = node_data.get('title') or self._find_in_state('title') or self._find_in_state('topic_title') or self._find_in_state('topic') or 'AI Video'
+                hook = self._find_in_state('hook') or ''
+                text_source = (node_data.get('text_source') or 'Hook (punchiest)').lower()
+                if 'title' in text_source:
+                    custom_text = title
+                    hook = ''
+                elif 'custom' in text_source:
+                    custom_text = node_data.get('custom_text') or title
+                    hook = ''
+                else:
+                    custom_text = ''
+                style = node_data.get('style') or 'Bold Viral'
+                scenes = node_data.get('scenes') or self._find_in_state('scenes') or []
+                scene_images = []
+                for sc in scenes:
+                    for p in (sc.get('image_paths') or []):
+                        scene_images.append(p)
+                    if sc.get('image_path'):
+                        scene_images.append(sc['image_path'])
+                thumb_path = generate_thumbnail(
+                    title=title, hook=hook, scene_images=scene_images,
+                    style=style, custom_text=custom_text,
+                    output_filename=f"thumbnail_{node_id}.png"
+                )
+                result = {
+                    "status": "success",
+                    "node_type": node_type,
+                    "thumbnail_path": thumb_path
+                }
+
             elif node_type in ['youtube-upload', 'upload-yt']:
                 from src.backend.youtube_upload import upload_video
                 user_id = node_data.get('user_id', 1)
@@ -489,12 +564,34 @@ class WorkflowEngine:
                 }
 
             else:
-                result = {
-                    "status": "success",
-                    "node_type": node_type,
-                    "processed_data": node_data,
-                    "received_inputs": inputs
-                }
+                # ── Translate: real implementation (was a silent passthrough).
+                # Translates scene narrations to the target language and stores
+                # them as narration_<code> on each scene + translated_script.
+                if node_type == 'translate':
+                    from src.backend.dubbing import translate_scenes, translate_text, LANG_CODES
+                    scenes = node_data.get('scenes') or self._find_in_state('scenes') or []
+                    script = node_data.get('script') or self._find_in_state('script') or ""
+                    lang = node_data.get('lang') or node_data.get('target_language') or 'Hindi'
+                    code = LANG_CODES.get(lang.lower(), 'hi')
+                    if scenes:
+                        scenes = translate_scenes(scenes, target=code)
+                    translated_script = translate_text(script, target=code) if script else ""
+                    result = {
+                        "status": "success",
+                        "node_type": node_type,
+                        "language": lang,
+                        "language_code": code,
+                        "scenes": scenes,
+                        "translated_script": translated_script,
+                        f"script_{code}": translated_script,
+                    }
+                else:
+                    result = {
+                        "status": "success",
+                        "node_type": node_type,
+                        "processed_data": node_data,
+                        "received_inputs": inputs
+                    }
                 
         except Exception as e:
             import traceback
