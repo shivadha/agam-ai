@@ -548,6 +548,7 @@ def assemble_cinematic_video(
     
     # Record render in Creative AI Brain for continuous learning
     try:
+        learned_transitions = [s.get('transition_type', 'glitch_flash') for s in (scenes or [])] or ['zoom_burst_in']
         creative_brain.record_learning_session(
             video_id=output_filename,
             topic=topic_title,
