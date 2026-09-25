@@ -287,7 +287,8 @@ def _generate_image_once(
                 print(f"[image_gen] Direct Gemini Imagen 3 failed: {e}. Falling back to next...")
 
     # ── Attempt 3: HuggingFace Cloud Spaces (FLUX.1-schnell & SD 3.5 Turbo) ──────
-    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    from src.backend.connection_tests import clean_token as _clean_token
+    hf_token = _clean_token(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN"))
     if hf_token or model_name in ["FLUX.1", "HuggingFace", "SD 3.5"]:
         try:
             from gradio_client import Client

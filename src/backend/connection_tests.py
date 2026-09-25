@@ -35,6 +35,16 @@ def _env(*names: str) -> str:
     return ""
 
 
+def clean_token(val: str) -> str:
+    """Sanitize a pasted API token: strip whitespace, surrounding quotes,
+    and any inner whitespace/newlines (HF tokens never contain them —
+    they only appear from bad copy-pastes, and any of them -> HTTP 401)."""
+    v = (val or "").strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1].strip()
+    return "".join(v.split())
+
+
 def _ok(provider: str, message: str, t0: float) -> dict:
     return {"ok": True, "provider": provider, "message": message, "latency_ms": _ms(t0)}
 
@@ -178,7 +188,7 @@ def test_llm(model_name: str = "", api_key: str = "") -> dict:
             pass
 
     # 7. Hugging Face Inference (free tier, optional token)
-    hf_token = _env("HF_TOKEN", "HUGGINGFACE_TOKEN")
+    hf_token = clean_token(_env("HF_TOKEN", "HUGGINGFACE_TOKEN"))
     note("Hugging Face")
     hf_res = _ping_hf_text(hf_token, t0)
     if hf_res:
@@ -252,7 +262,7 @@ def test_image(model_name: str = "", api_key: str = "") -> dict:
 
     # Hugging Face (FLUX.1 / SD)
     if any(k in model for k in ["flux", "huggingface", "hugging", "sd", "stable"]):
-        hf_token = _env("HF_TOKEN", "HUGGINGFACE_TOKEN")
+        hf_token = clean_token(_env("HF_TOKEN", "HUGGINGFACE_TOKEN"))
         if not hf_token:
             return _fail("HF_TOKEN not set — Hugging Face image models need a token.", t0, "Hugging Face")
         try:
@@ -261,7 +271,15 @@ def test_image(model_name: str = "", api_key: str = "") -> dict:
             if r.status_code == 200:
                 who = r.json().get("name", "?")
                 return _ok("Hugging Face", f"HF token valid (user: {who}) — FLUX.1 ready.", t0)
-            return _fail(f"Hugging Face token rejected (HTTP {r.status_code}).", t0, "Hugging Face")
+            if r.status_code == 401:
+                return _fail(
+                    "Hugging Face rejected the saved token (HTTP 401) — it is invalid, "
+                    "expired, or revoked on Hugging Face's side. Fix: open "
+                    "https://huggingface.co/settings/tokens, create a new User Access "
+                    "Token (fine-grained tokens need the 'Make calls to Inference "
+                    "Providers' permission), then paste it fresh into API Keys → "
+                    "Hugging Face and re-run PreFlight.", t0, "Hugging Face")
+            return _fail(f"Hugging Face token check failed (HTTP {r.status_code}).", t0, "Hugging Face")
         except Exception as e:
             return _fail(f"Hugging Face unreachable: {e}", t0, "Hugging Face")
 
@@ -344,7 +362,7 @@ def test_video(provider: str = "", api_key: str = "") -> dict:
             pass
         # fall through to HF check when provider is auto
 
-    hf_token = _env("HF_TOKEN", "HUGGINGFACE_TOKEN")
+    hf_token = clean_token(_env("HF_TOKEN", "HUGGINGFACE_TOKEN"))
     if "huggingface" in prov or "svd" in prov or "cogvideo" in prov or not key:
         if hf_token:
             try:
