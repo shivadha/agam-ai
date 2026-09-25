@@ -313,7 +313,21 @@ def run_workflow():
     payload = request.get_json()
     if not payload:
         return jsonify({"error": "No JSON payload provided."}), 400
-        
+
+    # ── Pre-flight gate: refuse to start when a required node has no live connection.
+    #    Pass {"skip_preflight": true} to override (not recommended).
+    if not payload.get("skip_preflight"):
+        from src.backend.connection_tests import preflight_workflow
+        check = preflight_workflow(payload)
+        if not check["can_start"]:
+            return jsonify({
+                "status": "blocked",
+                "message": "Workflow blocked: one or more nodes have no live connection. "
+                           "Test each failing node, add the missing API key / start the local service, then run again.",
+                "failed": check["failed"],
+                "nodes": check["nodes"],
+            }), 400
+
     try:
         import uuid
         run_id = str(uuid.uuid4())
@@ -341,153 +355,6 @@ def run_workflow():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/api/workflow/test-connection', methods=['POST'])
-@login_required
-def test_node_connection():
-    payload = request.get_json() or {}
-    node_type = payload.get('node_type') or payload.get('type')
-    config = payload.get('config') or {}
-    
-    t_start = time.time()
-    try:
-        # LLM Nodes: gen-script, extract-viral-angle, gen-hook, gen-scene-breakdown, translate, gen-title, gen-desc, gen-tags, gen-seo
-        if node_type in ['gen-script', 'extract-viral-angle', 'gen-hook', 'gen-scene-breakdown', 'translate', 'gen-title', 'gen-desc', 'gen-tags', 'gen-seo']:
-            model = config.get('model', 'GPT-4o')
-            api_key = config.get('api_key', '').strip()
-            
-            # 1. Groq
-            if 'groq' in model.lower() or (not api_key and os.environ.get('GROQ_API_KEY')):
-                groq_key = api_key if 'groq' in model.lower() and api_key else os.environ.get('GROQ_API_KEY', '').strip()
-                if not groq_key:
-                    return jsonify({"status": "error", "message": "No Groq API Key found. Add it in node config or .env"}), 400
-                r = requests.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                    json={"model": "qwen/qwen3.8-27b", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 5},
-                    timeout=10
-                )
-                latency = int((time.time() - t_start) * 1000)
-                if r.status_code == 200:
-                    return jsonify({"status": "success", "latency_ms": latency, "model": "Groq (Qwen 3.8 27B)", "message": f"Connected! Ultra-fast response ({latency}ms)"})
-                else:
-                    return jsonify({"status": "error", "latency_ms": latency, "model": "Groq", "message": f"Groq Error ({r.status_code}): {r.text[:120]}"}), 400
-            
-            # 2. Gemini
-            elif 'gemini' in model.lower():
-                gem_key = api_key or os.environ.get('GEMINI_API_KEY', '').strip()
-                if not gem_key:
-                    return jsonify({"status": "error", "message": "No Google Gemini API Key found. Enter key or set GEMINI_API_KEY in .env"}), 400
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gem_key}"
-                r = requests.post(url, headers={"Content-Type": "application/json"}, json={"contents": [{"parts": [{"text": "ping"}]}]}, timeout=12)
-                latency = int((time.time() - t_start) * 1000)
-                if r.status_code == 200:
-                    return jsonify({"status": "success", "latency_ms": latency, "model": "Google Gemini 2.0 Flash", "message": f"Connected to Gemini live ({latency}ms)!"})
-                else:
-                    return jsonify({"status": "error", "latency_ms": latency, "model": "Gemini", "message": f"Gemini Error ({r.status_code}): {r.text[:120]}"}), 400
-
-            # 3. Ollama
-            elif 'ollama' in model.lower() or any(m in model.lower() for m in ['shivam-pro', 'deepseek', 'qwen']):
-                r = requests.get("http://localhost:11434/api/tags", timeout=3)
-                latency = int((time.time() - t_start) * 1000)
-                if r.status_code == 200:
-                    models = [m.get('name') for m in r.json().get('models', [])]
-                    return jsonify({"status": "success", "latency_ms": latency, "model": "Local Ollama", "message": f"Connected to Ollama! Available models: {', '.join(models[:4])}"})
-                else:
-                    return jsonify({"status": "error", "message": "Ollama server is not responding at http://localhost:11434"}), 400
-
-            # 4. OpenAI
-            elif 'gpt' in model.lower() or 'openai' in model.lower():
-                o_key = api_key or os.environ.get('OPENAI_API_KEY', '').strip()
-                if not o_key:
-                    return jsonify({"status": "error", "message": "No OpenAI API key provided."}), 400
-                r = requests.get("https://api.openai.com/v1/models", headers={"Authorization": f"Bearer {o_key}"}, timeout=8)
-                latency = int((time.time() - t_start) * 1000)
-                if r.status_code == 200:
-                    return jsonify({"status": "success", "latency_ms": latency, "model": "OpenAI GPT-4o", "message": f"Connected to OpenAI ({latency}ms)!"})
-                else:
-                    return jsonify({"status": "error", "latency_ms": latency, "model": "OpenAI", "message": f"OpenAI Error ({r.status_code}): {r.text[:120]}"}), 400
-
-            # Default fallback check
-            else:
-                if os.environ.get('GROQ_API_KEY'):
-                    r = requests.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers={"Authorization": f"Bearer {os.environ.get('GROQ_API_KEY')}", "Content-Type": "application/json"},
-                        json={"model": "qwen/qwen3.8-27b", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 5},
-                        timeout=8
-                    )
-                    latency = int((time.time() - t_start) * 1000)
-                    if r.status_code == 200:
-                        return jsonify({"status": "success", "latency_ms": latency, "model": "Groq Free Cloud", "message": f"Connected via Groq ({latency}ms)"})
-                return jsonify({"status": "success", "latency_ms": 100, "model": "Auto-AI Engine", "message": "Ready to execute!"})
-
-        # Image Gen Nodes: gen-image, image-gen, visuals
-        elif node_type in ['gen-image', 'image-gen', 'visuals']:
-            model = config.get('model', 'FLUX.1')
-            
-            # Hugging Face FLUX.1
-            if 'flux' in model.lower() or 'huggingface' in model.lower() or 'sd' in model.lower():
-                hf_tok = os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_TOKEN')
-                if not hf_tok:
-                    return jsonify({"status": "error", "message": "HF_TOKEN not found in environment."}), 400
-                r = requests.get("https://huggingface.co/api/spaces/black-forest-labs/FLUX.1-schnell", headers={"Authorization": f"Bearer {hf_tok}"}, timeout=8)
-                latency = int((time.time() - t_start) * 1000)
-                if r.status_code in [200, 302]:
-                    return jsonify({"status": "success", "latency_ms": latency, "model": "Hugging Face FLUX.1-schnell", "message": f"Connected to FLUX.1 Space ({latency}ms) - 100% Free!"})
-                else:
-                    return jsonify({"status": "error", "latency_ms": latency, "message": f"Hugging Face Space returned {r.status_code}"}), 400
-
-            # ComfyUI Local
-            elif 'comfy' in model.lower():
-                r = requests.get("http://127.0.0.1:8188/system_stats", timeout=3)
-                latency = int((time.time() - t_start) * 1000)
-                if r.status_code == 200:
-                    dev = r.json().get('devices', [{}])[0].get('name', 'GPU')
-                    return jsonify({"status": "success", "latency_ms": latency, "model": "ComfyUI Local", "message": f"Connected to ComfyUI ({dev})!"})
-                else:
-                    return jsonify({"status": "error", "message": "ComfyUI is not running on http://127.0.0.1:8188"}), 400
-
-            # Pollinations
-            else:
-                return jsonify({"status": "success", "latency_ms": 120, "model": "Pollinations FLUX", "message": "Connected to Pollinations Free Image Engine!"})
-
-        # Voice / TTS Nodes: tts
-        elif node_type == 'tts':
-            try:
-                import kokoro
-                return jsonify({"status": "success", "latency_ms": 5, "model": "Kokoro-82M", "message": "Kokoro-82M Neural Engine active (ElevenLabs Quality, 0ms latency)!"})
-            except Exception:
-                return jsonify({"status": "success", "latency_ms": 50, "model": "Edge-TTS", "message": "Edge-TTS Neural Voice active!"})
-
-        # Video Gen Nodes: img-to-video, gen-video
-        elif node_type in ['img-to-video', 'gen-video']:
-            prov = config.get('provider', 'comfyui').lower()
-            if 'comfy' in prov or 'local' in prov:
-                r = requests.get("http://127.0.0.1:8188/system_stats", timeout=3)
-                latency = int((time.time() - t_start) * 1000)
-                if r.status_code == 200:
-                    return jsonify({"status": "success", "latency_ms": latency, "model": "ComfyUI Local (Wan 2.1 / LTX-Video)", "message": f"ComfyUI is running live on port 8188 ({latency}ms)!"})
-                else:
-                    return jsonify({"status": "error", "message": "ComfyUI is not reachable at http://127.0.0.1:8188"}), 400
-            elif 'huggingface' in prov or 'svd' in prov:
-                hf_tok = os.environ.get('HF_TOKEN')
-                r = requests.get("https://huggingface.co/api/spaces/multimodalart/stable-video-diffusion", headers={"Authorization": f"Bearer {hf_tok}"}, timeout=8)
-                latency = int((time.time() - t_start) * 1000)
-                if r.status_code in [200, 302]:
-                    return jsonify({"status": "success", "latency_ms": latency, "model": "Hugging Face SVD", "message": f"Connected to HF SVD Space ({latency}ms)!"})
-                else:
-                    return jsonify({"status": "error", "message": f"Hugging Face returned status {r.status_code}"}), 400
-            else:
-                return jsonify({"status": "success", "latency_ms": 50, "model": config.get('provider', 'AI Video'), "message": "Provider configured."})
-
-        # Fallback for other nodes
-        else:
-            return jsonify({"status": "success", "latency_ms": 10, "message": f"Node '{node_type}' is valid and ready."})
-
-    except Exception as ex:
-        return jsonify({"status": "error", "latency_ms": int((time.time() - t_start) * 1000), "message": f"Connection test failed: {str(ex)}"}), 500
-
-@app.route('/api/workflow/retry/<run_id>', methods=['POST'])
 @login_required
 def retry_workflow(run_id):
     with _runs_lock:
@@ -497,6 +364,17 @@ def retry_workflow(run_id):
         payload = old_run.get('payload')
         if not payload:
             return jsonify({"status": "error", "message": "No payload stored for this run"}), 400
+
+    # Same pre-flight gate as /api/workflow/run — retries must not bypass it.
+    if not (request.get_json() or {}).get("skip_preflight"):
+        from src.backend.connection_tests import preflight_workflow
+        check = preflight_workflow(payload)
+        if not check["can_start"]:
+            return jsonify({
+                "status": "blocked",
+                "message": "Retry blocked: one or more nodes have no live connection.",
+                "failed": check["failed"],
+            }), 400
 
     import uuid
     new_run_id = str(uuid.uuid4())
@@ -538,128 +416,37 @@ def get_workflow_status(run_id):
 @login_required
 def test_workflow_node_connection():
     """
-    Live connection & authentication test for any node before running the workflow.
-    Validates API keys, model reachability, and server status live.
+    Live connection & authentication test for a single node.
+    Backed by src/backend/connection_tests.py — every check is a real ping.
     """
+    from src.backend.connection_tests import test_node
     data = request.get_json() or {}
-    node_type = data.get('node_type', '')
-    config = data.get('config', {}) or {}
-    model = str(config.get('model') or data.get('model', '')).strip()
-    api_key = str(config.get('api_key') or data.get('api_key', '')).strip()
-    provider = str(config.get('provider') or data.get('provider', '')).strip()
+    node_type = data.get('node_type') or data.get('type') or ''
+    config = data.get('config') or {}
+    # also accept flat model/api_key/provider at top level
+    for k in ('model', 'api_key', 'provider', 'user_id'):
+        if k in data and k not in config:
+            config[k] = data[k]
+    res = test_node(node_type, config)
+    res['node_type'] = node_type
+    # legacy shape compat: also expose status/message fields some UI code reads
+    res['status'] = 'success' if res['ok'] else 'error'
+    res['model'] = res.get('provider') or ''
+    return jsonify(res), (200 if res['ok'] else 400)
 
-    start_t = time.time()
-    res = {"ok": False, "node_type": node_type, "message": ""}
 
-    try:
-        if node_type in ['gen-script', 'extract-viral-angle', 'gen-hook', 'gen-scene-breakdown', 'translate']:
-            # 1. Test LLM / Script Provider
-            gem_key = api_key if "gemini" in model.lower() else (os.environ.get("GEMINI_API_KEY", "").strip() or api_key)
-            o_key = api_key if "gpt" in model.lower() else (os.environ.get("OPENAI_API_KEY", "").strip() or api_key)
-            muse_key = api_key if ("muse" in model.lower() or api_key.startswith("LLM_")) else (os.environ.get("MUSE_API_KEY", "").strip() or os.environ.get("META_API_KEY", "").strip() or api_key)
-            groq_key = os.environ.get("GROQ_API_KEY", "").strip()
-            
-            if ("muse" in model.lower() or api_key.startswith("LLM_")) and muse_key:
-                try:
-                    headers = {"Authorization": f"Bearer {muse_key}", "Content-Type": "application/json"}
-                    m_resp = requests.get("https://api.meta.ai/v1/models", headers=headers, timeout=8)
-                    if m_resp.status_code == 200:
-                        m_list = [item.get("id") for item in m_resp.json().get("data", [])]
-                        res = {"ok": True, "provider": "Meta Model API (Muse Spark)", "model": "muse-spark-1.3", "message": f"Connected to Meta Muse Spark! Models available: {', '.join(m_list[:3])}"}
-                    else:
-                        res = {"ok": False, "provider": "Meta Muse", "message": f"Meta API response ({m_resp.status_code}): {m_resp.text[:120]}"}
-                except Exception as m_ex:
-                    res = {"ok": False, "provider": "Meta Muse", "message": f"Meta API error: {str(m_ex)}"}
-            elif ("gemini" in model.lower() or not model or model == "GPT-4o") and gem_key:
-                test_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gem_key}"
-                test_resp = requests.post(test_url, json={"contents": [{"parts": [{"text": "Say ok"}]}]}, timeout=12)
-                if test_resp.status_code == 200:
-                    res = {"ok": True, "provider": "Google Gemini (Free Jio/Studio)", "model": "gemini-2.0-flash", "message": "Connected to Google Gemini 2.0 Flash successfully!"}
-                else:
-                    res = {"ok": False, "provider": "Google Gemini", "message": f"Gemini error ({test_resp.status_code}): {test_resp.text[:140]}"}
-            elif "gpt" in model.lower() and o_key:
-                headers = {"Authorization": f"Bearer {o_key}", "Content-Type": "application/json"}
-                o_resp = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5}, timeout=12)
-                if o_resp.status_code == 200:
-                    res = {"ok": True, "provider": "OpenAI", "model": "gpt-4o", "message": "Connected to OpenAI successfully!"}
-                else:
-                    res = {"ok": False, "provider": "OpenAI", "message": f"OpenAI error ({o_resp.status_code}): {o_resp.text[:140]}"}
-            elif "ollama" in model.lower():
-                chk = requests.get("http://localhost:11434/api/tags", timeout=3)
-                if chk.status_code == 200:
-                    models = [m.get('name') for m in chk.json().get('models', [])]
-                    res = {"ok": True, "provider": "Local Ollama", "message": f"Local Ollama online ({len(models)} models available)!"}
-                else:
-                    res = {"ok": False, "message": "Local Ollama is not responding on port 11434."}
-            elif groq_key:
-                g_resp = requests.get("https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {groq_key}"}, timeout=6)
-                if g_resp.status_code == 200:
-                    res = {"ok": True, "provider": "Groq Cloud (Free)", "message": "Groq ultra-fast LLaMA API connected!"}
-            
-            if not res.get("ok"):
-                # Test Free Pollinations
-                try:
-                    p_resp = requests.post("https://text.pollinations.ai/", json={"messages": [{"role": "user", "content": "ping"}]}, timeout=8)
-                    if p_resp.status_code == 200:
-                        res = {"ok": True, "provider": "Pollinations AI (Zero-Cost Cloud)", "message": "Free cloud AI text engine is active."}
-                    else:
-                        res = {"ok": False, "message": "No reachable AI script model. Please provide a Gemini API key."}
-                except Exception:
-                    res = {"ok": False, "message": "No reachable AI script model. Please configure a valid Gemini or OpenAI key."}
-
-        elif node_type in ['gen-image', 'visuals', 'image-gen']:
-            # 2. Test Image Provider
-            hf_token = os.environ.get("HF_TOKEN", "").strip()
-            if hf_token:
-                try:
-                    from huggingface_hub import HfApi
-                    api = HfApi(token=hf_token)
-                    u = api.whoami()
-                    res = {"ok": True, "provider": "Hugging Face Cloud", "model": "black-forest-labs/FLUX.1-schnell", "message": f"Hugging Face authenticated (User: {u.get('name')}). FLUX.1 Cloud ready ($0)!"}
-                except Exception as hf_e:
-                    res = {"ok": False, "message": f"Hugging Face token error: {hf_e}"}
-            else:
-                try:
-                    c_resp = requests.get("http://127.0.0.1:8188/system_stats", timeout=2)
-                    if c_resp.status_code == 200:
-                        res = {"ok": True, "provider": "Local ComfyUI", "message": "ComfyUI GPU server running on port 8188!"}
-                    else:
-                        res = {"ok": False, "message": "ComfyUI offline and no HF_TOKEN found."}
-                except Exception:
-                    res = {"ok": True, "provider": "Pollinations Flux (Cloud)", "message": "Pollinations Free Flux cloud engine active."}
-
-        elif node_type in ['img-to-video', 'image-to-video']:
-            # 3. Test Video Provider
-            comfy_ok = False
-            try:
-                c_resp = requests.get("http://127.0.0.1:8188/system_stats", timeout=2)
-                comfy_ok = (c_resp.status_code == 200)
-            except Exception:
-                pass
-
-            hf_token = os.environ.get("HF_TOKEN", "").strip()
-            if comfy_ok:
-                res = {"ok": True, "provider": "ComfyUI Local (LTX-Video / Wan)", "message": "Local ComfyUI GPU server active on port 8188!"}
-            elif hf_token:
-                res = {"ok": True, "provider": "Hugging Face Cloud Spaces (SVD / CogVideoX)", "message": "Hugging Face SVD & CogVideoX Cloud Spaces authenticated & ready ($0)!"}
-            else:
-                res = {"ok": False, "message": "Neither ComfyUI (port 8188) nor Hugging Face token is active."}
-
-        elif node_type in ['tts', 'voice']:
-            # 4. Test Voice Provider
-            try:
-                import kokoro
-                res = {"ok": True, "provider": "Kokoro-82M (ElevenLabs Quality)", "message": "Kokoro-82M local neural voice engine is installed & ready ($0 Local)!"}
-            except Exception:
-                res = {"ok": True, "provider": "Edge-TTS", "message": "Microsoft Edge Neural Voice cloud engine active."}
-        else:
-            res = {"ok": True, "message": f"Node type '{node_type}' verified."}
-
-    except Exception as ex:
-        res = {"ok": False, "message": f"Connection test failed: {str(ex)}"}
-
-    res["latency_ms"] = res.get("latency_ms") or int((time.time() - start_t) * 1000)
-    return jsonify(res)
+@app.route('/api/workflow/preflight', methods=['POST'])
+@login_required
+def workflow_preflight():
+    """
+    Pre-flight gate: live-test every connection-requiring node in the workflow.
+    Returns {"can_start": bool, "nodes": {...}, "failed": [...]}.
+    The workflow runner refuses to start when can_start is False.
+    """
+    from src.backend.connection_tests import preflight_workflow
+    payload = request.get_json() or {}
+    result = preflight_workflow(payload)
+    return jsonify(result), (200 if result['can_start'] else 400)
 
 
 # ── Video Storage & Output Serving API ──────────────────────────────────────
@@ -1617,7 +1404,10 @@ def api_keys_manager():
                 "ELEVENLABS_API_KEY": mask("ELEVENLABS_API_KEY"),
                 "OPENAI_API_KEY": mask("OPENAI_API_KEY"),
                 "GROQ_API_KEY": mask("GROQ_API_KEY"),
+                "GEMINI_API_KEY": mask("GEMINI_API_KEY"),
                 "MUSE_API_KEY": mask("MUSE_API_KEY") or mask("META_API_KEY"),
+                "HF_TOKEN": mask("HF_TOKEN") or mask("HUGGINGFACE_TOKEN"),
+                "ASTRA_API_KEY": mask("ASTRA_API_KEY") or mask("EXPERIENTIAL_API_KEY"),
                 "COMFYUI_URL": os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188"),
             },
             "is_set": {
@@ -1626,7 +1416,10 @@ def api_keys_manager():
                 "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY")),
                 "openai": bool(os.environ.get("OPENAI_API_KEY")),
                 "groq": bool(os.environ.get("GROQ_API_KEY")),
+                "gemini": bool(os.environ.get("GEMINI_API_KEY")),
                 "muse": bool(os.environ.get("MUSE_API_KEY") or os.environ.get("META_API_KEY")),
+                "huggingface": bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")),
+                "astra": bool(os.environ.get("ASTRA_API_KEY") or os.environ.get("EXPERIENTIAL_API_KEY")),
             }
         })
 
@@ -1653,9 +1446,20 @@ def api_keys_manager():
         if not found and new_val:
             env_lines.append(f"{key_name}={new_val}\n")
 
-    for k in ["MINIMAX_API_KEY", "FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "MUSE_API_KEY", "COMFYUI_URL"]:
+    # Canonical env names accepted by the connection tests & providers.
+    # Aliases (HUGGINGFACE_TOKEN, META_API_KEY, EXPERIENTIAL_API_KEY) are
+    # normalized to the canonical name on save.
+    KEY_ALIASES = {
+        "HUGGINGFACE_TOKEN": "HF_TOKEN",
+        "META_API_KEY": "MUSE_API_KEY",
+        "EXPERIENTIAL_API_KEY": "ASTRA_API_KEY",
+    }
+    for k in ["MINIMAX_API_KEY", "FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY",
+              "GROQ_API_KEY", "GEMINI_API_KEY", "MUSE_API_KEY", "HF_TOKEN",
+              "ASTRA_API_KEY", "COMFYUI_URL",
+              "HUGGINGFACE_TOKEN", "META_API_KEY", "EXPERIENTIAL_API_KEY"]:
         if k in data:
-            update_key(k, data[k])
+            update_key(KEY_ALIASES.get(k, k), data[k])
 
     try:
         with open(env_path, "w", encoding="utf-8") as f:

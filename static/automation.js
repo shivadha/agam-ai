@@ -317,6 +317,8 @@ function cacheDOM() {
         keyInputOpenai:      g('keyInputOpenai'),
         keyInputGroq:        g('keyInputGroq'),
         keyInputMuse:        g('keyInputMuse'),
+        keyInputGemini:      g('keyInputGemini'),
+        keyInputHf:          g('keyInputHf'),
         keyInputComfyUrl:    g('keyInputComfyUrl'),
         badgeMinimaxKey:     g('badgeMinimaxKey'),
         badgeFalKey:         g('badgeFalKey'),
@@ -324,6 +326,8 @@ function cacheDOM() {
         badgeOpenaiKey:      g('badgeOpenaiKey'),
         badgeGroqKey:        g('badgeGroqKey'),
         badgeMuseKey:        g('badgeMuseKey'),
+        badgeGeminiKey:      g('badgeGeminiKey'),
+        badgeHfKey:          g('badgeHfKey'),
         badgeComfyUrl:       g('badgeComfyUrl'),
     };
 }
@@ -952,6 +956,43 @@ async function runWorkflow() {
         if (preflight.openModal) {
             openApiKeysModal();
         }
+        return;
+    }
+
+    // ── LIVE SERVER PRE-FLIGHT: test every node's real connection before starting.
+    //    The server refuses the run when a required node has no live connection.
+    showToast('⚡ Testing live node connections...', 'info', 2500);
+    logAdd('[PreFlight] Testing live connections for all nodes...', 'info');
+    try {
+        const pfRes = await fetch('/api/workflow/preflight', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+                nodes: APP.nodes.map(n => ({
+                    id: n.id, type: n.type,
+                    data: n.data || {}, config: n.config || {}
+                }))
+            })
+        });
+        const pfData = await pfRes.json();
+        if (!pfData.can_start) {
+            const failed = (pfData.failed || []).map(f =>
+                `• ${f.node_type} (${f.node_id}): ${f.message}`).join('\n');
+            showToast('🚫 Workflow blocked — no live connection on required nodes. See log.', 'error', 8000);
+            logAdd(`[PreFlight] ❌ BLOCKED — failing nodes:\n${failed}`, 'error');
+            (pfData.failed || []).forEach(f => {
+                const node = APP.nodes.find(n => n.id === f.node_id);
+                if (node) { node._connTested = true; node._connOk = false; }
+            });
+            openApiKeysModal();
+            return;
+        }
+        const okCount = Object.keys(pfData.nodes || {}).length;
+        logAdd(`[PreFlight] ✅ All ${okCount} node connection(s) live — starting workflow.`, 'success');
+    } catch (pfErr) {
+        showToast(`⚠️ Live connection check failed: ${pfErr.message}. Run blocked for safety.`, 'error', 7000);
+        logAdd(`[PreFlight] ❌ live check error: ${pfErr.message}`, 'error');
         return;
     }
 
@@ -3397,6 +3438,8 @@ async function loadApiKeys() {
             if (D.keyInputOpenai && !D.keyInputOpenai.value) D.keyInputOpenai.placeholder = k.OPENAI_API_KEY || 'sk-...';
             if (D.keyInputGroq && !D.keyInputGroq.value) D.keyInputGroq.placeholder = k.GROQ_API_KEY || 'gsk_...';
             if (D.keyInputMuse && !D.keyInputMuse.value) D.keyInputMuse.placeholder = k.MUSE_API_KEY || 'LLM_...';
+            if (D.keyInputGemini && !D.keyInputGemini.value) D.keyInputGemini.placeholder = k.GEMINI_API_KEY || 'AIza...';
+            if (D.keyInputHf && !D.keyInputHf.value) D.keyInputHf.placeholder = k.HF_TOKEN || 'hf_...';
             if (D.keyInputComfyUrl && !D.keyInputComfyUrl.value) D.keyInputComfyUrl.value = k.COMFYUI_URL || 'http://127.0.0.1:8188';
 
             _updateKeyBadge(D.badgeMinimaxKey, is_set.minimax, 'Configured', 'Not Set');
@@ -3405,6 +3448,8 @@ async function loadApiKeys() {
             _updateKeyBadge(D.badgeOpenaiKey, is_set.openai, 'Configured', 'Optional');
             _updateKeyBadge(D.badgeGroqKey, is_set.groq, 'Configured', 'Optional');
             _updateKeyBadge(D.badgeMuseKey, is_set.muse, 'Configured', 'Optional');
+            _updateKeyBadge(D.badgeGeminiKey, is_set.gemini, 'Configured', 'Optional · free tier');
+            _updateKeyBadge(D.badgeHfKey, is_set.huggingface, 'Configured', 'Optional · free');
             if (D.badgeComfyUrl) {
                 _updateKeyBadge(D.badgeComfyUrl, true, 'Active', 'Not Set');
             }
@@ -3450,6 +3495,8 @@ async function saveApiKeys() {
     if (D.keyInputOpenai?.value?.trim()) payload.OPENAI_API_KEY = D.keyInputOpenai.value.trim();
     if (D.keyInputGroq?.value?.trim()) payload.GROQ_API_KEY = D.keyInputGroq.value.trim();
     if (D.keyInputMuse?.value?.trim()) payload.MUSE_API_KEY = D.keyInputMuse.value.trim();
+    if (D.keyInputGemini?.value?.trim()) payload.GEMINI_API_KEY = D.keyInputGemini.value.trim();
+    if (D.keyInputHf?.value?.trim()) payload.HF_TOKEN = D.keyInputHf.value.trim();
     if (D.keyInputComfyUrl?.value?.trim()) payload.COMFYUI_URL = D.keyInputComfyUrl.value.trim();
 
     if (Object.keys(payload).length === 0) {
@@ -3473,6 +3520,8 @@ async function saveApiKeys() {
             if (D.keyInputOpenai) D.keyInputOpenai.value = '';
             if (D.keyInputGroq) D.keyInputGroq.value = '';
             if (D.keyInputMuse) D.keyInputMuse.value = '';
+            if (D.keyInputGemini) D.keyInputGemini.value = '';
+            if (D.keyInputHf) D.keyInputHf.value = '';
             await loadApiKeys();
             setTimeout(closeApiKeysModal, 700);
         } else {

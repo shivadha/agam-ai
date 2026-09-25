@@ -17,6 +17,7 @@ import base64
 import hashlib
 import re
 import json
+import threading
 import urllib.request
 import urllib.parse
 import requests
@@ -29,8 +30,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Session deduplication registry: maps image hash to file path
+# Session deduplication registry: maps image hash to file path.
+# Enforced (not just recorded): generate_image() retries with a fresh seed
+# when a provider returns a byte-identical image.
 _used_image_hashes = set()
+_hash_lock = threading.Lock()
 
 
 def _get_image_hash(file_path: str) -> str:
@@ -191,7 +195,7 @@ def _generate_comfyui_image(prompt: str, output_path: str, width: int = 512, hei
         return None
 
 
-def generate_image(
+def _generate_image_once(
     prompt: str,
     output_path: str,
     width: int = 1080,
@@ -199,11 +203,13 @@ def generate_image(
     model_name: str = "DALL-E 3",
     custom_api_key: str = "",
     scene_index: int = 0,
-    total_scenes: int = 1
-) -> str:
+    total_scenes: int = 1,
+    seed: int | None = None,
+) -> str | None:
     """
-    Generates a unique image using free market providers, direct APIs, or topic-matched stock images.
-    Guarantees that no duplicate images are returned and NO random images (like fruits/beans) are ever used.
+    Single attempt at generating a unique image (no dedup retry here —
+    use generate_image() which enforces it).
+    Returns the output path, or None when every provider failed.
     """
     output_dir = os.path.dirname(os.path.abspath(output_path))
     if output_dir:
@@ -213,16 +219,13 @@ def generate_image(
     brain = get_creative_brain()
     enhanced_prompt = brain.enhance_scene_prompt(prompt, scene_index, total_scenes, visual_style="Cinematic")
     
-    # Generate unique seed per scene
-    unique_seed = (int(time.time() * 1000) + scene_index * 1337 + hash(prompt)) % 1000000
+    # Generate unique seed per scene (overridable for dedup retries)
+    unique_seed = seed if seed is not None else (int(time.time() * 1000) + scene_index * 1337 + hash(prompt)) % 1000000
 
     # ── Attempt 1: 100% Free Local ComfyUI GPU Generation ────────────────────────
     try:
         comfy_img = _generate_comfyui_image(enhanced_prompt, output_path, width=min(width, 768), height=min(height, 1024))
         if comfy_img and os.path.exists(comfy_img) and os.path.getsize(comfy_img) > 1000:
-            img_hash = _get_image_hash(comfy_img)
-            if img_hash:
-                _used_image_hashes.add(img_hash)
             return comfy_img
     except Exception as comfy_err:
         print(f"[image_gen] Local ComfyUI check note: {comfy_err}")
@@ -305,9 +308,6 @@ def generate_image(
                 img_path = img_val.get("path") if isinstance(img_val, dict) else img_val
                 if img_path and os.path.exists(img_path) and os.path.getsize(img_path) > 1000:
                     shutil.copyfile(img_path, output_path)
-                    img_hash = _get_image_hash(output_path)
-                    if img_hash:
-                        _used_image_hashes.add(img_hash)
                     print(f"[image_gen] OK: HuggingFace FLUX.1 image saved to {output_path}")
                     return output_path
         except Exception as hf_err:
@@ -334,9 +334,6 @@ def generate_image(
             if r.status_code == 200 and len(r.content) > 3000:
                 with open(output_path, 'wb') as f:
                     f.write(r.content)
-                img_hash = _get_image_hash(output_path)
-                if img_hash:
-                    _used_image_hashes.add(img_hash)
                 print(f"[image_gen] OK: AI Image synthesized via free model '{model_choice}' saved to {output_path}")
                 return output_path
         except Exception as e:
@@ -345,9 +342,6 @@ def generate_image(
     # ── Attempt 3: Topic-Specific Stock Search (Guaranteed Topic Alignment, NO Fruits/Beans) ──
     print(f"[image_gen] Searching authentic topic stock assets for: '{_extract_topic_keywords(prompt)}'...")
     if _fetch_topic_stock_image(prompt, width, height, output_path):
-        img_hash = _get_image_hash(output_path)
-        if img_hash:
-            _used_image_hashes.add(img_hash)
         return output_path
 
     # ── Attempt 4: Dynamic Local Cinematic Poster Artwork (100% Offline & Topic-Aligned) ──
@@ -387,10 +381,17 @@ def generate_images_for_scenes(
     def process_scene(idx_scene_tuple):
         i, scene = idx_scene_tuple
         prompts = []
-        if 'image_prompt' in scene:
+        if scene.get('image_prompt'):
             prompts = [scene['image_prompt']]
-        elif 'image_prompts' in scene:
+        elif scene.get('image_prompts'):
             prompts = scene['image_prompts'] if isinstance(scene['image_prompts'], list) else [scene['image_prompts']]
+
+        if not prompts:
+            # Last-resort: build a topic-specific prompt from the narration so the
+            # scene is never silently skipped for lack of a prompt.
+            narr = scene.get('narration') or f"Scene {i + 1}"
+            prompts = [f"Cinematic photorealistic 8k vertical shot of: {narr}. Dramatic volumetric lighting, 9:16"]
+            print(f"[image_gen] Scene {i + 1}: no image_prompt supplied — built one from narration.")
 
         scene['image_paths'] = []
         for j, base_prompt in enumerate(prompts):
@@ -413,6 +414,15 @@ def generate_images_for_scenes(
             if path and os.path.exists(path):
                 scene['image_paths'].append(path)
 
+        if not scene['image_paths']:
+            # Fail LOUDLY — a scene with no image must halt the pipeline via the
+            # orchestrator's CRITICAL HALT, never silently vanish from the video.
+            raise RuntimeError(
+                f"Scene {i + 1}: every image provider failed (see logs above). "
+                f"Check the image node connection and retry."
+            )
+        print(f"[image_gen] Scene {i + 1}/{total_scenes}: {len(scene['image_paths'])} image(s) ready.")
+
         return i, scene
 
     # Execute all scenes simultaneously in parallel
@@ -433,3 +443,52 @@ if __name__ == "__main__":
         generate_image(sys.argv[1], sys.argv[2])
     else:
         print("Usage: python image_gen.py <prompt> <output_path>")
+
+
+# ── Public entry point: enforced visual uniqueness ──────────────────────────
+
+def generate_image(
+    prompt: str,
+    output_path: str,
+    width: int = 1080,
+    height: int = 1920,
+    model_name: str = "DALL-E 3",
+    custom_api_key: str = "",
+    scene_index: int = 0,
+    total_scenes: int = 1,
+    max_attempts: int = 3,
+) -> str | None:
+    """
+    Generates a unique image for a scene.
+
+    Enforces the session dedup registry: if a provider returns a byte-identical
+    image to one already used this session, the attempt is discarded and retried
+    with a fresh seed (up to max_attempts). Returns the output path, or None
+    when every provider failed.
+    """
+    base_seed = (int(time.time() * 1000) + scene_index * 1337 + hash(prompt)) % 1000000
+    for attempt in range(max_attempts):
+        seed = (base_seed + attempt * 7919) % 1000000
+        try:
+            path = _generate_image_once(
+                prompt, output_path, width=width, height=height,
+                model_name=model_name, custom_api_key=custom_api_key,
+                scene_index=scene_index, total_scenes=total_scenes, seed=seed,
+            )
+        except Exception as e:
+            print(f"[image_gen] Attempt {attempt + 1}/{max_attempts} crashed: {e}")
+            path = None
+        if not path or not os.path.exists(path) or os.path.getsize(path) <= 1000:
+            print(f"[image_gen] Attempt {attempt + 1}/{max_attempts}: no image produced; retrying...")
+            continue
+        img_hash = _get_image_hash(path)
+        with _hash_lock:
+            if img_hash and img_hash in _used_image_hashes:
+                print(f"[image_gen] Attempt {attempt + 1}/{max_attempts}: duplicate image detected "
+                      f"(hash seen before) — regenerating with a fresh seed.")
+                continue
+            if img_hash:
+                _used_image_hashes.add(img_hash)
+        return path
+    print(f"[image_gen] FAILED: all {max_attempts} attempts produced duplicates or nothing for scene {scene_index + 1}.")
+    return None

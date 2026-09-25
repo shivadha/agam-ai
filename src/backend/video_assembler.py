@@ -325,6 +325,7 @@ def assemble_cinematic_video(
     effects_list = ['zoom_burst_in', 'zoom_burst_out', 'whip_pan_left', 'whip_pan_right', 'speed_ramp', 'motion_blur_push', 'glitch_flash']
 
     for idx, scene in enumerate(scenes):
+        clips_before = len(video_clips)
         video_paths = scene.get('video_paths', [])
         img_paths = scene.get('image_paths', [])
         
@@ -364,6 +365,20 @@ def assemble_cinematic_video(
                 if shot_idx > 0 or idx > 0:
                     boundary_times.append(current_time)
                 current_time += shot_duration
+
+        clips_added = len(video_clips) - clips_before
+        if clips_added == 0:
+            # A scene must NEVER silently vanish — fail loudly so the run halts
+            # instead of producing a video with missing scenes.
+            raise RuntimeError(
+                f"Scene {idx + 1}/{len(scenes)} produced zero video clips "
+                f"(no video_paths and no image_paths). Aborting assembly."
+            )
+        print(f"[video_assembler] Scene {idx + 1}/{len(scenes)}: {clips_added} clip(s) "
+              f"({'AI video' if video_paths else 'motion-effect stills'}).")
+
+    if not video_clips:
+        raise RuntimeError("Video assembly failed: no clips were produced from any scene.")
 
     final_video = add_custom_transitions(video_clips, scenes, 1080, 1920)
     final_video = final_video.with_duration(total_duration)

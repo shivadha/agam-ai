@@ -375,3 +375,73 @@ def generate_hook(
 def get_example_hooks() -> list[str]:
     """Returns the 5 built-in reference hooks for testing/display."""
     return list(EXAMPLE_HOOKS)
+
+
+def generate_hook_visuals(
+    hook_text: str,
+    topic: str = "",
+    viral_angle_text: str = "",
+    emotion: str = "curiosity",
+    model_name: str = "GPT-4o",
+    custom_api_key: str = "",
+    visual_style: str = "cinema_8k",
+) -> dict:
+    """
+    AI-generates the visual prompts for the hook (title hero shot):
+    a still image prompt and an image-to-video motion prompt, both grounded
+    in the hook text and topic. Falls back to constructed prompts when the
+    LLM is unreachable (visuals degrade gracefully; the hook text does not).
+    """
+    from src.backend.script_gen import _chat_via_chain
+
+    print(f"[hook_gen] Generating AI visual prompts for hook: '{hook_text[:60]}...'")
+    system_prompt = (
+        "You are a cinematic art director for viral vertical videos (9:16 Shorts/Reels).\n"
+        "Given a video hook line and topic, design the single most scroll-stopping "
+        "opening visual. Return ONLY valid raw JSON with keys:\n"
+        '{"hook_image_prompt": "...", "hook_image_to_video_prompt": "..."}\n'
+        "Rules for hook_image_prompt: hyper-realistic 8k cinematic still, jaw-dropping iconic "
+        "embodiment of the hook/topic, dramatic volumetric lighting, 9:16 vertical, no text overlays.\n"
+        "Rules for hook_image_to_video_prompt: exact camera motion for image-to-video models "
+        "(e.g. 'aggressive cinematic push-in with lens flare bloom, 4k 60fps')."
+    )
+    user_prompt = (
+        f"Hook line: {hook_text}\n"
+        f"Topic: {topic}\n"
+        f"Viral angle: {viral_angle_text}\n"
+        f"Emotion: {emotion}\n"
+        f"Visual style: {visual_style}\n"
+        "Design the hook visual now."
+    )
+
+    raw = _chat_via_chain(system_prompt, user_prompt, model_name, custom_api_key,
+                          tag="hook-visuals", max_new_tokens=600)
+    if raw:
+        try:
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("```")[1]
+                if cleaned.startswith("json"):
+                    cleaned = cleaned[4:]
+            data = json.loads(cleaned.strip("` \n\t"))
+            img_p = (data.get("hook_image_prompt") or "").strip()
+            vid_p = (data.get("hook_image_to_video_prompt") or "").strip()
+            if img_p and vid_p:
+                print("[hook_gen] [OK] AI hook visual prompts generated.")
+                return {"hook_image_prompt": img_p, "hook_image_to_video_prompt": vid_p}
+        except Exception as e:
+            print(f"[hook_gen] Hook visual JSON parse note: {e}")
+
+    # Graceful fallback — constructed from the hook itself, still topic-specific.
+    print("[hook_gen] Using constructed hook visual prompts (LLM unavailable).")
+    return {
+        "hook_image_prompt": (
+            f"Hyper-realistic 8k cinematic vertical still embodying '{hook_text}'. "
+            f"Topic: {topic}. Jaw-dropping iconic composition, dramatic volumetric lighting, "
+            f"{visual_style} style, 9:16 vertical, no text"
+        ),
+        "hook_image_to_video_prompt": (
+            f"Aggressive cinematic push-in toward the subject of '{hook_text[:60]}', "
+            f"lens flare bloom, subtle parallax, 4k 60fps"
+        ),
+    }

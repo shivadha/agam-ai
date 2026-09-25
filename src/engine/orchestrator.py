@@ -172,13 +172,21 @@ class WorkflowEngine:
                     custom_prompt += f'\nVIRAL ANGLE: {viral_angle_text}'
                 custom_prompt += f'\nTARGET LENGTH: {shorts_length} seconds'
 
+                # Phase-1 context: feed the article through so the script is grounded
+                article_url = node_data.get('article_url') or self._find_in_state('article_url') or ''
+                article_summary = node_data.get('article_summary') or self._find_in_state('article_summary') or ''
+                topic_context = node_data.get('topic_context') or self._find_in_state('topic_context') or ''
+
                 script_data = generate_video_content(
-                    topic_title, 
-                    custom_prompt, 
-                    model_name=ai_model, 
+                    topic_title,
+                    custom_prompt,
+                    model_name=ai_model,
                     custom_api_key=custom_api_key,
                     shorts_length=shorts_length,
-                    visual_style=visual_style
+                    visual_style=visual_style,
+                    article_url=article_url,
+                    article_summary=article_summary,
+                    topic_context=topic_context,
                 )
                 
                 scenes_list = (script_data.get('scenes') if script_data else []) or []
@@ -365,7 +373,7 @@ class WorkflowEngine:
                 result = {'status': 'success', 'node_type': node_type, **viral_data}
 
             elif node_type == 'gen-hook':
-                from src.backend.hook_gen import generate_hook
+                from src.backend.hook_gen import generate_hook, generate_hook_visuals
                 viral_angle_data = self._find_in_state('viral_angle') or {}
                 if not viral_angle_data:
                     viral_angle_data = {
@@ -376,7 +384,21 @@ class WorkflowEngine:
                 model_name = node_data.get('model', 'GPT-4o')
                 custom_api_key = node_data.get('api_key', '')
                 hook = generate_hook(viral_angle_data, model_name, custom_api_key)
-                result = {'status': 'success', 'node_type': node_type, 'hook': hook}
+                # AI-generated visual prompts for the hook hero shot (image + motion)
+                topic = node_data.get('topic') or self._find_in_state('topic_title') or self._find_in_state('topic') or ''
+                visual_style = node_data.get('visual_style') or self._find_in_state('visual_style') or 'cinema_8k'
+                try:
+                    hook_visuals = generate_hook_visuals(
+                        hook, topic=topic,
+                        viral_angle_text=viral_angle_data.get('viral_angle', ''),
+                        emotion=viral_angle_data.get('emotion', 'curiosity'),
+                        model_name=model_name, custom_api_key=custom_api_key,
+                        visual_style=visual_style,
+                    )
+                except Exception as hv_err:
+                    print(f"[Orchestrator] Hook visuals note: {hv_err}")
+                    hook_visuals = {}
+                result = {'status': 'success', 'node_type': node_type, 'hook': hook, **hook_visuals}
 
             elif node_type == 'bg-music':
                 from src.backend.music_engine import get_music_for_emotion
