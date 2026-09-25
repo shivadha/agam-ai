@@ -75,3 +75,21 @@ their DOM; failures name the broken selector). To add a site: copy
 `gemini.py`, implement `needs_login()` + `generate()`, register it in
 `registry.py`, and add a row via the Free AI tab or
 `free_providers.upsert_provider(...)`.
+
+## Strategy rotation (video providers)
+
+`gemini_web` and `veo_web` both do image-to-video, and every run takes a
+*different recorded path* to the feature — doing the exact same clicks in
+the same order every time is the easiest bot pattern to fingerprint.
+
+- Each plugin has a `VIDEO_STRATEGIES` ledger at the bottom of its file:
+  every distinct way to reach image-to-video, with a name and description
+  (e.g. Gemini: `video_chip`, `tools_menu`, `model_picker`,
+  `chat_intent`; Veo/Flow: `frames_direct`, `new_project_first`,
+  `prompt_first`, `keyboard_flow`).
+- `StrategyRotator` (in `providers/base.py`) picks one per run at random,
+  never repeating the previous run's choice. The choice is persisted in
+  `data/agent_strategy_state.json` and logged, and the used strategy name
+  is stored on the job result — so every video job records which path it
+  took. To teach the agent a new way, add one `_strategy_*` function +
+  one ledger entry; nothing else changes.

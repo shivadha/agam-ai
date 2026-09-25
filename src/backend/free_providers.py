@@ -272,15 +272,19 @@ def seed_builtin_providers():
     )
     upsert_provider(
         "gemini_web", "Gemini Web (AI Pro)", "https://gemini.google.com/",
-        kinds=["image"], priority=2,
-        notes="User's Google AI plan: free image generation via website.",
+        kinds=["image", "video"], priority=2,
+        notes="User's Google AI plan: free image generation + image-to-video (Veo model) via website. "
+              "Video runs rotate through recorded strategies (video chip / tools menu / model picker / chat intent), "
+              "a different path every run.",
         balance_recipe={"api_patterns": ["batchexecute"], "dom_selector": "",
-                        "regex": r"(\d+)\s*(?:images?|generations?)\s*(?:left|remaining|per day)"},
+                        "regex": r"(\d+)\s*(?:images?|generations?|videos?)\s*(?:left|remaining|per day)"},
     )
     upsert_provider(
         "veo_web", "Veo Web (free tier)", "https://labs.google/fx/",
         kinds=["video"], priority=3,
-        notes="Free Veo tier via Google Flow: image-to-video, few videos/day.",
+        notes="Free Veo tier via Google Flow: image-to-video, few videos/day. "
+              "Each run rotates through recorded strategies (frames-direct / new-project-first / "
+              "prompt-first / keyboard-driven), a different path every run.",
         balance_recipe={"api_patterns": ["flow", "credits"], "dom_selector": "",
                         "regex": r"(\d+)\s*(?:credits?|videos?)\s*(?:left|remaining)"},
     )

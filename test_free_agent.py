@@ -182,4 +182,37 @@ d = r.get_json()
 assert d["status"] == "success" and "agent_alive" in d
 print("4d. GET /api/free/jobs OK")
 
+# ── 5. video strategy rotation ───────────────────────────────────────────
+from src.agent.providers.base import StrategyRotator
+from src.agent.providers.gemini import GeminiProvider, VIDEO_STRATEGIES as GEM_STRATS
+from src.agent.providers.veo import VeoProvider, VIDEO_STRATEGIES as VEO_STRATS
+
+assert "video" in GeminiProvider().kinds, "gemini must do video now"
+assert "video" in VeoProvider().kinds
+print("5a. gemini_web + veo_web both serve kind=video OK")
+
+for pid, strats in (("gemini_web", GEM_STRATS), ("veo_web", VEO_STRATS)):
+    assert len(strats) >= 3, (pid, len(strats))
+    assert all({"name", "desc", "run"} <= set(s) for s in strats), pid
+    assert len({s["name"] for s in strats}) == len(strats), "dup strategy names"
+    sf = os.path.join(tmp, f"strat_{pid}.json")
+    rot = StrategyRotator(pid, strats, state_file=sf)
+    picks = [rot.pick()["name"] for _ in range(10)]
+    assert all(a != b for a, b in zip(picks, picks[1:])), (pid, picks)
+    assert rot.last_used() == picks[-1]
+    # persisted: a fresh rotator continues the no-repeat chain
+    rot2 = StrategyRotator(pid, strats, state_file=sf)
+    assert rot2.last_used() == picks[-1]
+    assert rot2.pick()["name"] != picks[-1]
+    print(f"5b. {pid}: {len(strats)} recorded strategies, 10 picks no-repeat OK ->",
+          [s for s in picks[:4]], "...")
+
+# gemini is now eligible for video jobs through the ledger
+fp.seed_builtin_providers()  # re-seed picks up kinds=["image","video"]
+g = fp.get_provider("gemini_web")
+assert "video" in g["kinds"], g["kinds"]
+pv = fp.pick_provider("video")
+assert pv is not None and "video" in pv["kinds"], pv
+print("5c. pick_provider(video) ->", pv["id"], "(gemini_web eligible)")
+
 print("\nALL TESTS PASSED")
