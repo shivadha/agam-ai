@@ -1,4 +1,4 @@
-﻿"""
+"""
 skill_engine.py -- AGAM AI Brain Transplant System
 ====================================================
 Implements the HuggingFace "Upskill Agents" pattern:

@@ -5,12 +5,12 @@ Tests: login -> workflow run -> verify results
 import requests
 import sys
 
-BASE = "http://127.0.0.1:5000"
+BASE = "http://127.0.0.1:3000"
 
 # 1. Login
 s = requests.Session()
 print("[TEST] Logging in...")
-r = s.post(f"{BASE}/login", json={"email": "shivamdhagat1@gmail.com", "password": "admin"})
+r = s.post(f"{BASE}/login", json={"email": "shivamdhagat1@gmail.com", "password": "Shivam@9806"})
 if r.status_code not in (200, 302):
     print(f"[TEST] Login failed: {r.status_code} {r.text}")
     sys.exit(1)
