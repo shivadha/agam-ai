@@ -127,6 +127,24 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
     Hugging Face Inference (free).
     """
     content_str = None
+
+    # 0. Free-web background agent (ChatGPT Go / Gemini web via invisible
+    #    browser). Single integration point: every caller of _chat_via_chain
+    #    (gen-script, gen-hook, hook visuals, seo...) automatically supports
+    #    model names like "free-web" or "free-web:chatgpt_go".
+    if model_name.lower().startswith("free-web"):
+        from src.backend.free_agent_client import generate_text, FreeAgentError
+        prefer = model_name.split(":", 1)[1].strip() if ":" in model_name else None
+        combined = (f"{system_prompt}\n\n{user_prompt}\n\n"
+                    f"(Reply with only the requested content.)")
+        try:
+            print(f"[script_gen] Routing to free-web agent (prefer={prefer or 'auto'})...")
+            return generate_text(combined, provider_id=prefer,
+                                 timeout=max(600, max_new_tokens))
+        except FreeAgentError as e:
+            print(f"[script_gen] free-web agent failed: {e}")
+            return None
+
     active_key = custom_api_key or os.environ.get("ASTRA_API_KEY", "") or os.environ.get("EXPERIENTIAL_API_KEY", "")
     clean_key = active_key.strip().rstrip('|') if active_key else ""
     is_astra = "astra" in model_name.lower() or (clean_key and clean_key.startswith("xpl_"))

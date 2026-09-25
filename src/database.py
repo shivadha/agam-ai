@@ -84,6 +84,59 @@ def init_db():
                 user_id       INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                 credentials   TEXT
             );
+
+            -- Free-web background agent: provider ledger ---------------------
+            CREATE TABLE IF NOT EXISTS free_providers (
+                id             TEXT PRIMARY KEY,
+                name           TEXT NOT NULL,
+                url            TEXT NOT NULL,
+                kinds          TEXT NOT NULL DEFAULT '["image"]',
+                quota_total    INTEGER,
+                balance        INTEGER,
+                used_count     INTEGER NOT NULL DEFAULT 0,
+                balance_recipe TEXT NOT NULL DEFAULT '{}',
+                status         TEXT NOT NULL DEFAULT 'active',
+                enabled        INTEGER NOT NULL DEFAULT 1,
+                priority       INTEGER NOT NULL DEFAULT 10,
+                notes          TEXT,
+                created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_checked   TIMESTAMP
+            );
+
+            -- Scout-discovered candidates awaiting approval ------------------
+            CREATE TABLE IF NOT EXISTS free_candidates (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL,
+                url         TEXT NOT NULL,
+                kinds       TEXT NOT NULL DEFAULT '["image"]',
+                quota_hint  TEXT,
+                source      TEXT,
+                source_url  TEXT,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(url)
+            );
+
+            -- Background agent job queue --------------------------------------
+            CREATE TABLE IF NOT EXISTS agent_jobs (
+                id            TEXT PRIMARY KEY,
+                provider_id   TEXT NOT NULL,
+                kind          TEXT NOT NULL,
+                prompt        TEXT,
+                input_path    TEXT,
+                status        TEXT NOT NULL DEFAULT 'queued',
+                result_path   TEXT,
+                result_text   TEXT,
+                error         TEXT,
+                balance_after INTEGER,
+                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at    TIMESTAMP,
+                finished_at   TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_jobs_status ON agent_jobs(status, created_at);
+            CREATE INDEX IF NOT EXISTS idx_free_providers_status ON free_providers(status, enabled, priority);
         ''')
 
         # Auto-migration: ensure image_url exists on legacy tables

@@ -2626,6 +2626,7 @@ function switchView(viewName) {
         setTimeout(() => { applyTransform(); drawMinimap(); }, 50);
     }
     if (viewName === 'dashboard') { buildDashboard(); }
+    if (viewName === 'free-ai' && typeof window.buildFreeAI === 'function') { window.buildFreeAI(); }
 }
 
 
