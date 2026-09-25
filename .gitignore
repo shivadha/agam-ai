@@ -37,3 +37,7 @@ ENV/
 
 # Logs
 *.log
+
+# Sub-repositories and temporary prompts
+signal/
+signal_prompt.txt

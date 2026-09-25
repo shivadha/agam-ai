@@ -29,6 +29,11 @@ MODELS = {
         "name": "DreamShaper 8 (100% Free Local AI Image Generator for 6GB RTX 3060 - ~2GB)",
         "repo_id": "Lykon/DreamShaper",
         "filename": "DreamShaper_8_pruned.safetensors"
+    },
+    "5": {
+        "name": "MiniMax-H3 Omni (Video + Native Stereo Audio - Open Weights)",
+        "repo_id": "MiniMaxAI/MiniMax-H3",
+        "filename": "h3_transformer.safetensors"
     }
 }
 

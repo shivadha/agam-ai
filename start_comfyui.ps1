@@ -41,4 +41,4 @@ Write-Host "[*] Starting ComfyUI server at http://127.0.0.1:8188..." -Foreground
 Write-Host "[*] Mode: Dynamic Smart VRAM (RTX 3060 6GB Optimized)" -ForegroundColor Green
 Write-Host "========================================================" -ForegroundColor Cyan
 
-& $pyPath main.py --listen 127.0.0.1 --port 8188 --reserve-vram 1.0
+& $pyPath main.py --listen 127.0.0.1 --port 8188 --reserve-vram 0.8 --disable-mmap

@@ -45,8 +45,8 @@ const NDEFS = {
     'schedule-trigger': { label:'Schedule Trigger',     icon:'⏰',  cat:'trigger',  color:'#8b5cf6', execMs:500  },
     'article-trigger':  { label:'Article Selected',     icon:'📰',  cat:'trigger',  color:'#8b5cf6', execMs:900  },
     // ── AI
-    'extract-viral-angle': { label:'Extract Viral Angle',  icon:'🎯', cat:'ai',    color:'#e11d48', execMs:2800 },
-    'gen-hook':         { label:'Generate Hook',         icon:'🪝',  cat:'ai',       color:'#dc2626', execMs:1800 },
+    'extract-viral-angle': { label:'Extract Viral Angle',  icon:'🎯', cat:'ai',    color:'#8b5cf6', execMs:2800 },
+    'gen-hook':         { label:'Generate Hook',         icon:'🪝',  cat:'ai',       color:'#f59e0b', execMs:1800 },
     'gen-script':       { label:'Generate Script',       icon:'📝',  cat:'ai',       color:'#3b82f6', execMs:4200 },
     'gen-scene-breakdown': { label:'Scene Breakdown',    icon:'🎬',  cat:'ai',       color:'#7c3aed', execMs:2200 },
     'translate':        { label:'Translate',             icon:'🌐',  cat:'ai',       color:'#3b82f6', execMs:2500 },
@@ -82,16 +82,16 @@ const NDEFS = {
 // Node-specific config schemas
 const NODE_CONFIGS = {
     'extract-viral-angle': [
-        { key:'model',     label:'AI Model',      type:'select', opts:['GPT-4o','Gemini 2.5 Flash','Claude 3.5 Sonnet','Llama 3.1 405B','Ollama (deepseek-r1)','Ollama (shivam-pro)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'GPT-4o' },
-        { key:'api_key',   label:'API Key (Optional)', type:'text', placeholder:'sk-... or AIza...', def:'' },
+        { key:'model',     label:'AI Model',      type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
+        { key:'api_key',   label:'API Key (Optional)', type:'text', placeholder:'Leave blank to use key from .env', def:'' },
     ],
     'gen-hook': [
-        { key:'model',     label:'AI Model',      type:'select', opts:['GPT-4o','Gemini 2.5 Flash','Claude 3.5 Sonnet','Ollama (deepseek-r1)','Ollama (shivam-pro)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'GPT-4o' },
-        { key:'api_key',   label:'API Key (Optional)', type:'text', placeholder:'sk-... or AIza...', def:'' },
+        { key:'model',     label:'AI Model',      type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
+        { key:'api_key',   label:'API Key (Optional)', type:'text', placeholder:'Leave blank to use key from .env', def:'' },
     ],
     'gen-scene-breakdown': [
-        { key:'model',     label:'AI Model',      type:'select', opts:['GPT-4o','Gemini 2.5 Flash'], def:'GPT-4o' },
-        { key:'api_key',   label:'API Key (Optional)', type:'text', placeholder:'sk-... or AIza...', def:'' },
+        { key:'model',     label:'AI Model',      type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','Meta Muse Spark 1.3 [Muse]','Gemini 2.0 Flash [Free]','GPT-4o'], def:'Groq (Qwen 3.8 27B) [Free]' },
+        { key:'api_key',   label:'API Key (Optional)', type:'text', placeholder:'Leave blank to use key from .env', def:'' },
     ],
     'bg-music': [
         { key:'emotion',   label:'Override Emotion', type:'select', opts:['auto','surprise','shock','fear','excitement','curiosity','anger','inspiration'], def:'auto' },
@@ -114,34 +114,34 @@ const NODE_CONFIGS = {
         { key:'topic',    label:'Saved Article', type:'select', opts:['Loading...'], def:'Loading...' },
     ],
     'gen-script': [
-        { key:'model',    label:'AI Model',     type:'select', opts:['GPT-4o','Claude 3.5 Sonnet','Gemini 1.5 Pro','Gemini 2.5 Flash','Llama 3.1 405B','Ollama (deepseek-r1)','Ollama (shivam-pro)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'GPT-4o' },
-        { key:'api_key',  label:'API Key (Optional)', type:'text', placeholder:'sk-... or AIza...', def:'' },
+        { key:'model',    label:'AI Model',     type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
+        { key:'api_key',  label:'API Key (Optional)', type:'text', placeholder:'Leave blank – uses GROQ_API_KEY from .env', def:'' },
         { key:'shorts_length', label:'Shorts Length', type:'select', opts:['30 seconds','45 seconds','60 seconds'], def:'45 seconds' },
         { key:'style',    label:'Video Style',  type:'select', opts:['Viral Short','Informative','Educational','Entertaining','Tutorial'], def:'Viral Short' },
-        { key:'prompt',   label:'Custom Prompt',type:'textarea', placeholder:'Add any extra instructions...', def:'' },
+        { key:'prompt',   label:'Custom Prompt',type:'textarea', placeholder:'Add any extra instructions for AI context...', def:'' },
     ],
     'translate': [
         { key:'lang',     label:'Target Language', type:'select', opts:['Hindi','Spanish','French','German','Japanese','Portuguese'], def:'Hindi' },
-        { key:'model',    label:'Translation Model', type:'select', opts:['GPT-4o','Claude 3.5','Google Translate'], def:'GPT-4o' },
+        { key:'model',    label:'Translation Model', type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','Meta Muse Spark 1.3 [Muse]','GPT-4o','Google Translate'], def:'Groq (Qwen 3.8 27B) [Free]' },
     ],
     'gen-seo': [
         { key:'keywords', label:'Focus Keywords', type:'text', placeholder:'AI, automation, YouTube...', def:'' },
     ],
     'tts': [
-        { key:'voice',    label:'Voice',         type:'select', opts:['en-US-ChristopherNeural (Male)','en-US-JennyNeural (Female)','en-US-GuyNeural (Male)','en-GB-RyanNeural (British)','en-AU-NatashaNeural (AU Female)'], def:'en-US-ChristopherNeural (Male)' },
+        { key:'voice',    label:'Voice',         type:'select', opts:['Kokoro-82M (af_heart) [Local Free]','Kokoro-82M (am_adam) [Local Free]','en-US-ChristopherNeural (Edge)','en-US-JennyNeural (Edge)','en-GB-RyanNeural (Edge)'], def:'Kokoro-82M (af_heart) [Local Free]' },
         { key:'speed',    label:'Speed',         type:'range',  min:0.5, max:2.0, step:0.1, def:1.1 },
         { key:'language', label:'Language',      type:'select', opts:['English','Hindi','Spanish','French','Japanese'], def:'English' },
     ],
     'gen-image': [
-        { key:'model',    label:'Image Model',   type:'select', opts:['DALL-E 3','Stable Diffusion XL','Midjourney v6','Gemini (Imagen 3)'], def:'DALL-E 3' },
-        { key:'api_key',  label:'API Key (Optional)', type:'text', placeholder:'sk-... or AIza...', def:'' },
-        { key:'style',    label:'Visual Style',  type:'select', opts:['Cinematic','Realistic','Artistic','Flat Design','Anime'], def:'Cinematic' },
+        { key:'model',    label:'Image Model',   type:'select', opts:['HuggingFace FLUX.1 [Free]','Pollinations FLUX [Free]','ComfyUI (Local GPU)','DALL-E 3','Gemini (Imagen 3)'], def:'HuggingFace FLUX.1 [Free]' },
+        { key:'api_key',  label:'API Key (Optional)', type:'text', placeholder:'Leave blank – uses HF_TOKEN from .env', def:'' },
+        { key:'style',    label:'Visual Style',  type:'select', opts:['Cinematic 8K','Realistic','Artistic','Anime','Dark Moody'], def:'Cinematic 8K' },
         { key:'ratio',    label:'Aspect Ratio',  type:'select', opts:['9:16 (Shorts)','16:9 (YouTube)','1:1 (Square)'], def:'9:16 (Shorts)' },
-        { key:'count',    label:'Images to Generate', type:'select', opts:['1','2','4'], def:'2' },
+        { key:'count',    label:'Images per Scene', type:'select', opts:['1','2'], def:'1' },
     ],
     'img-to-video': [
-        { key:'provider', label:'AI Video Provider', type:'select', opts:['ComfyUI (Local Wan / SVD - Free)','fal.ai','HuggingFace SVD (Free)','Kling','Luma','Runway','Pika','Veo'], def:'ComfyUI (Local Wan / SVD - Free)' },
-        { key:'api_key',  label:'API Key (Optional)', type:'text', placeholder:'HF token, Kling key, fal key...', def:'' },
+        { key:'provider', label:'AI Video Provider', type:'select', opts:['ComfyUI (Local Wan 2.1 / LTX) [Free GPU]','HuggingFace SVD [Free Cloud]','MiniMax-H3 (Free/Cloud)','fal.ai','Kling','Luma','Runway'], def:'ComfyUI (Local Wan 2.1 / LTX) [Free GPU]' },
+        { key:'api_key',  label:'API Key (Optional)', type:'text', placeholder:'Leave blank for local/free mode', def:'' },
         { key:'motion',   label:'Motion Scale',  type:'select', opts:['Low','Medium','High'], def:'Medium' },
         { key:'ratio',    label:'Aspect Ratio',  type:'select', opts:['9:16 (Shorts)','16:9 (YouTube)'], def:'9:16 (Shorts)' },
     ],
@@ -305,6 +305,26 @@ function cacheDOM() {
         btnDownloadModalVideo: g('btnDownloadModalVideo'),
         // Toast
         toastContainer: g('toastContainer'),
+        // API Keys Configuration Modal
+        btnOpenApiKeysModal: g('btnOpenApiKeysModal'),
+        apiKeysConfigModal:  g('apiKeysConfigModal'),
+        apiKeysModalClose:   g('apiKeysModalClose'),
+        btnCancelApiKeys:    g('btnCancelApiKeys'),
+        btnSaveApiKeys:      g('btnSaveApiKeys'),
+        keyInputMinimax:     g('keyInputMinimax'),
+        keyInputFal:         g('keyInputFal'),
+        keyInputElevenlabs:  g('keyInputElevenlabs'),
+        keyInputOpenai:      g('keyInputOpenai'),
+        keyInputGroq:        g('keyInputGroq'),
+        keyInputMuse:        g('keyInputMuse'),
+        keyInputComfyUrl:    g('keyInputComfyUrl'),
+        badgeMinimaxKey:     g('badgeMinimaxKey'),
+        badgeFalKey:         g('badgeFalKey'),
+        badgeElevenKey:      g('badgeElevenKey'),
+        badgeOpenaiKey:      g('badgeOpenaiKey'),
+        badgeGroqKey:        g('badgeGroqKey'),
+        badgeMuseKey:        g('badgeMuseKey'),
+        badgeComfyUrl:       g('badgeComfyUrl'),
     };
 }
 
@@ -829,6 +849,12 @@ function showPropsContent(nodeId) {
         <div class="pc-fields" id="pc-fields-${nodeId}">
             ${conf.length ? conf.map(f => renderPcField(f, node)).join('') : '<p style="color:#6b7280;font-size:0.78rem;padding:0.5rem 0">No configuration needed.</p>'}
         </div>
+        <div class="pc-conn-test" id="pc-conn-${nodeId}" style="margin:10px 0 2px 0;">
+            <button class="pc-btn-test-conn" id="pc-test-btn-${nodeId}" onclick="testNodeConnection('${nodeId}')" style="width:100%;padding:8px 12px;background:linear-gradient(135deg,rgba(0,255,170,0.1),rgba(56,189,248,0.1));border:1px solid rgba(0,255,170,0.35);border-radius:7px;color:#00FFAA;font-size:0.76rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;transition:all 0.2s;">
+                <span>⚡</span> Test Live Connection
+            </button>
+            <div id="pc-conn-result-${nodeId}" style="margin-top:6px;display:none;"></div>
+        </div>
         ${resultSection}
         <div class="pc-actions">
             <button class="pc-btn pc-btn-dup" data-nid="${nodeId}">⧉ Duplicate</button>
@@ -915,6 +941,17 @@ async function runWorkflow() {
     if (!SELECTED_SIGNAL || !SELECTED_SIGNAL.title) {
         showToast('⚠️ No article or video signal selected! Please choose a news article or viral video before running the workflow.', 'warning', 5000);
         openSignalPicker();
+        return;
+    }
+
+    // ── PRE-FLIGHT VALIDATION: Prevent workflow start if configuration is missing ──
+    const preflight = await validateWorkflowRequirements();
+    if (!preflight.ok) {
+        showToast(`🚫 Workflow Halted: ${preflight.error}`, 'error', 7000);
+        logAdd(`[PreFlight] ❌ ${preflight.error}`, 'error');
+        if (preflight.openModal) {
+            openApiKeysModal();
+        }
         return;
     }
 
@@ -2056,7 +2093,80 @@ window.copyToClipboard = function(text) {
     }
 };
 
+// ──────────────────────────────────────────────────────────────
+// LIVE CONNECTION TEST FUNCTION
+// ──────────────────────────────────────────────────────────────
+window.testNodeConnection = async function(nodeId) {
+    const node = APP.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    const btn = document.getElementById(`pc-test-btn-${nodeId}`);
+    const resultDiv = document.getElementById(`pc-conn-result-${nodeId}`);
+    if (!btn || !resultDiv) return;
+
+    // Show loading state
+    btn.innerHTML = '<span class="spin">⟳</span> Testing Connection...';
+    btn.style.opacity = '0.7';
+    btn.style.pointerEvents = 'none';
+    resultDiv.style.display = 'none';
+
+    const config = { ...(node.config || {}) };
+
+    try {
+        const resp = await fetch('/api/workflow/test-connection', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+                node_type: node.type,
+                config: config
+            })
+        });
+
+        const data = await resp.json();
+        resultDiv.style.display = 'block';
+
+        if (data.status === 'success') {
+            node._connTested = true;
+            node._connOk = true;
+            resultDiv.innerHTML = `
+                <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(0,255,170,0.07);border:1px solid rgba(0,255,170,0.35);border-radius:6px;">
+                    <span style="font-size:1.1em;">✅</span>
+                    <div>
+                        <div style="font-size:0.74rem;font-weight:700;color:#00FFAA;">${escHtml(data.model || 'Connected')}</div>
+                        <div style="font-size:0.70rem;color:#94a3b8;">${escHtml(data.message || 'Connection OK')} · ${data.latency_ms || '?'}ms</div>
+                    </div>
+                </div>`;
+            btn.innerHTML = '✅ Connected — Test Again';
+            btn.style.borderColor = 'rgba(0,255,170,0.5)';
+        } else {
+            node._connTested = true;
+            node._connOk = false;
+            resultDiv.innerHTML = `
+                <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(239,68,68,0.07);border:1px solid rgba(239,68,68,0.35);border-radius:6px;">
+                    <span style="font-size:1.1em;">❌</span>
+                    <div>
+                        <div style="font-size:0.74rem;font-weight:700;color:#f87171;">Connection Failed</div>
+                        <div style="font-size:0.70rem;color:#94a3b8;">${escHtml(data.message || 'Unknown error')}</div>
+                    </div>
+                </div>`;
+            btn.innerHTML = '❌ Failed — Retry Test';
+            btn.style.borderColor = 'rgba(239,68,68,0.5)';
+            btn.style.color = '#f87171';
+        }
+    } catch (err) {
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = `<div style="padding:8px;color:#f87171;font-size:0.73rem;border:1px solid rgba(239,68,68,0.3);border-radius:6px;">⚠ Network error: ${escHtml(err.message)}</div>`;
+        btn.innerHTML = '⚡ Test Live Connection';
+    }
+
+    btn.style.opacity = '1';
+    btn.style.pointerEvents = 'auto';
+    renderCanvas();
+};
+
 window.revealVideoInFolder = async function(path) {
+
     try {
         showToast('Opening path in File Explorer...', 'info', 2000);
         const res = await fetch('/api/video/reveal', {
@@ -2379,6 +2489,7 @@ function init() {
     try { initAudioLibrary(); } catch(e) { console.error('initAudioLibrary error:', e); }
     try { loadDefaultWorkflow(); } catch(e) { console.error('loadDefaultWorkflow error:', e); }
     try { initSignalManager(); } catch(e) { console.error('initSignalManager error:', e); }
+    try { initApiKeysManager(); } catch(e) { console.error('initApiKeysManager error:', e); }
     try { initAdminSyncHub(); } catch(e) { console.error('initAdminSyncHub error:', e); }
     try { applyTransform(); } catch(e) { console.error('applyTransform error:', e); }
     
@@ -3252,6 +3363,247 @@ function initSignalManager() {
 
     // Signal reading is handled by _applyPersistedSignal() called from init()
     // after the view has been switched. This avoids race conditions.
+}
+
+// ──────────────────────────────────────────────────────────────
+// 23B. UNIFIED API KEYS CONFIGURATION & PRE-FLIGHT VALIDATION
+// ──────────────────────────────────────────────────────────────
+
+let PF_API_KEYS_CACHE = {
+    keys: {},
+    is_set: {
+        minimax: false,
+        fal: false,
+        elevenlabs: false,
+        openai: false,
+        groq: false,
+        muse: false
+    }
+};
+
+async function loadApiKeys() {
+    try {
+        const res = await fetch('/api/keys');
+        const data = await res.json();
+        if (data.status === 'success') {
+            PF_API_KEYS_CACHE = data;
+            
+            const k = data.keys || {};
+            const is_set = data.is_set || {};
+
+            if (D.keyInputMinimax && !D.keyInputMinimax.value) D.keyInputMinimax.placeholder = k.MINIMAX_API_KEY || 'Enter MiniMax API Key';
+            if (D.keyInputFal && !D.keyInputFal.value) D.keyInputFal.placeholder = k.FAL_KEY || 'Enter FAL_KEY';
+            if (D.keyInputElevenlabs && !D.keyInputElevenlabs.value) D.keyInputElevenlabs.placeholder = k.ELEVENLABS_API_KEY || 'Enter ElevenLabs API Key';
+            if (D.keyInputOpenai && !D.keyInputOpenai.value) D.keyInputOpenai.placeholder = k.OPENAI_API_KEY || 'sk-...';
+            if (D.keyInputGroq && !D.keyInputGroq.value) D.keyInputGroq.placeholder = k.GROQ_API_KEY || 'gsk_...';
+            if (D.keyInputMuse && !D.keyInputMuse.value) D.keyInputMuse.placeholder = k.MUSE_API_KEY || 'LLM_...';
+            if (D.keyInputComfyUrl && !D.keyInputComfyUrl.value) D.keyInputComfyUrl.value = k.COMFYUI_URL || 'http://127.0.0.1:8188';
+
+            _updateKeyBadge(D.badgeMinimaxKey, is_set.minimax, 'Configured', 'Not Set');
+            _updateKeyBadge(D.badgeFalKey, is_set.fal, 'Configured', 'Optional');
+            _updateKeyBadge(D.badgeElevenKey, is_set.elevenlabs, 'Configured', 'Edge-TTS Active');
+            _updateKeyBadge(D.badgeOpenaiKey, is_set.openai, 'Configured', 'Optional');
+            _updateKeyBadge(D.badgeGroqKey, is_set.groq, 'Configured', 'Optional');
+            _updateKeyBadge(D.badgeMuseKey, is_set.muse, 'Configured', 'Optional');
+            if (D.badgeComfyUrl) {
+                _updateKeyBadge(D.badgeComfyUrl, true, 'Active', 'Not Set');
+            }
+        }
+    } catch (e) {
+        console.warn('[API Keys] Failed loading status:', e);
+    }
+}
+
+function _updateKeyBadge(el, isSet, activeText, missingText) {
+    if (!el) return;
+    if (isSet) {
+        el.textContent = `🟢 ${activeText}`;
+        el.style.background = 'rgba(16,185,129,0.15)';
+        el.style.color = '#10b981';
+        el.style.border = '1px solid rgba(16,185,129,0.3)';
+    } else {
+        el.textContent = `⚪ ${missingText}`;
+        el.style.background = 'rgba(148,163,184,0.12)';
+        el.style.color = '#94a3b8';
+        el.style.border = '1px solid rgba(148,163,184,0.2)';
+    }
+}
+
+function openApiKeysModal() {
+    if (!D.apiKeysConfigModal) D.apiKeysConfigModal = document.getElementById('apiKeysConfigModal');
+    if (!D.apiKeysConfigModal) return;
+    D.apiKeysConfigModal.classList.remove('hidden');
+    loadApiKeys();
+}
+
+function closeApiKeysModal() {
+    if (!D.apiKeysConfigModal) D.apiKeysConfigModal = document.getElementById('apiKeysConfigModal');
+    if (!D.apiKeysConfigModal) return;
+    D.apiKeysConfigModal.classList.add('hidden');
+}
+
+async function saveApiKeys() {
+    const payload = {};
+    if (D.keyInputMinimax?.value?.trim()) payload.MINIMAX_API_KEY = D.keyInputMinimax.value.trim();
+    if (D.keyInputFal?.value?.trim()) payload.FAL_KEY = D.keyInputFal.value.trim();
+    if (D.keyInputElevenlabs?.value?.trim()) payload.ELEVENLABS_API_KEY = D.keyInputElevenlabs.value.trim();
+    if (D.keyInputOpenai?.value?.trim()) payload.OPENAI_API_KEY = D.keyInputOpenai.value.trim();
+    if (D.keyInputGroq?.value?.trim()) payload.GROQ_API_KEY = D.keyInputGroq.value.trim();
+    if (D.keyInputMuse?.value?.trim()) payload.MUSE_API_KEY = D.keyInputMuse.value.trim();
+    if (D.keyInputComfyUrl?.value?.trim()) payload.COMFYUI_URL = D.keyInputComfyUrl.value.trim();
+
+    if (Object.keys(payload).length === 0) {
+        showToast('No changes detected to save.', 'info');
+        closeApiKeysModal();
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+            showToast('✅ API Keys saved and activated successfully!', 'success');
+            if (D.keyInputMinimax) D.keyInputMinimax.value = '';
+            if (D.keyInputFal) D.keyInputFal.value = '';
+            if (D.keyInputElevenlabs) D.keyInputElevenlabs.value = '';
+            if (D.keyInputOpenai) D.keyInputOpenai.value = '';
+            if (D.keyInputGroq) D.keyInputGroq.value = '';
+            if (D.keyInputMuse) D.keyInputMuse.value = '';
+            await loadApiKeys();
+            setTimeout(closeApiKeysModal, 700);
+        } else {
+            showToast(`Failed saving keys: ${data.message || 'Unknown error'}`, 'error');
+        }
+    } catch (e) {
+        showToast(`Save error: ${e.message}`, 'error');
+    }
+}
+
+function initApiKeysManager() {
+    D.btnOpenApiKeysModal?.addEventListener('click', openApiKeysModal);
+    D.apiKeysModalClose?.addEventListener('click', closeApiKeysModal);
+    D.btnCancelApiKeys?.addEventListener('click', closeApiKeysModal);
+    D.btnSaveApiKeys?.addEventListener('click', saveApiKeys);
+    D.apiKeysConfigModal?.addEventListener('click', (e) => {
+        if (e.target === D.apiKeysConfigModal) closeApiKeysModal();
+    });
+
+    const comfyBadge = document.getElementById('comfyui-badge');
+    if (comfyBadge) {
+        comfyBadge.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openApiKeysModal();
+        });
+    }
+
+    loadApiKeys();
+}
+
+/**
+ * Pre-flight validation executed BEFORE runWorkflow starts.
+ * Prevents execution if mandatory AI keys or services are missing.
+ */
+async function validateWorkflowRequirements() {
+    await loadApiKeys();
+    const isSet = PF_API_KEYS_CACHE.is_set || {};
+
+    // 1. Check Image-to-Video nodes
+    const videoNode = APP.nodes.find(n => n.type === 'img-to-video' || n.type === 'image-to-video');
+    if (videoNode) {
+        const cfg = videoNode.config || videoNode.data || {};
+        const provider = (cfg.provider || 'ComfyUI (Local Wan / SVD - Free)').toLowerCase();
+        
+        const hasMinimax = Boolean(isSet.minimax);
+        const hasFal = Boolean(isSet.fal);
+
+        if (provider.includes('minimax')) {
+            if (!hasMinimax && !hasFal) {
+                let comfyOnline = false;
+                try {
+                    const cRes = await fetch('/api/comfyui/status');
+                    const cData = await cRes.json();
+                    comfyOnline = (cData.status === 'online');
+                } catch (err) {
+                    comfyOnline = false;
+                }
+
+                if (comfyOnline) {
+                    videoNode.config = videoNode.config || {};
+                    videoNode.config.provider = 'ComfyUI (Local Wan / SVD - Free)';
+                    if (videoNode.data) videoNode.data.provider = 'ComfyUI (Local Wan / SVD - Free)';
+                    showToast('⚡ MiniMax key not set: Auto-routing to local GPU ComfyUI for 100% Free AI Video!', 'info', 4000);
+                } else {
+                    return {
+                        ok: false,
+                        error: "MiniMax-H3 requires a MiniMax API Key (or FAL_KEY). Please configure your key in API Keys.",
+                        openModal: true
+                    };
+                }
+            }
+        } else if (provider.includes('fal.ai')) {
+            if (!hasFal) {
+                return {
+                    ok: false,
+                    error: "fal.ai provider requires a FAL_KEY. Please configure your key in API Keys.",
+                    openModal: true
+                };
+            }
+        } else if (provider.includes('comfyui')) {
+            let comfyOnline = false;
+            try {
+                const cRes = await fetch('/api/comfyui/status');
+                const cData = await cRes.json();
+                comfyOnline = (cData.status === 'online');
+            } catch (err) {
+                comfyOnline = false;
+            }
+
+            if (!comfyOnline && !hasMinimax && !hasFal) {
+                return {
+                    ok: false,
+                    error: "ComfyUI is offline on 127.0.0.1:8188 and no cloud fallback key is set. Launch ComfyUI (run start_comfyui.bat) or enter a MiniMax/fal.ai API key.",
+                    openModal: true
+                };
+            }
+        }
+    }
+
+    // 2. Check TTS Voice node
+    const ttsNode = APP.nodes.find(n => n.type === 'tts');
+    if (ttsNode) {
+        const cfg = ttsNode.config || ttsNode.data || {};
+        const voice = (cfg.voice || '').toLowerCase();
+        const provider = (cfg.provider || '').toLowerCase();
+
+        if ((provider === 'elevenlabs' || voice.startsWith('elevenlabs')) && !isSet.elevenlabs) {
+            return {
+                ok: false,
+                error: "ElevenLabs voice selected, but ELEVENLABS_API_KEY is not configured! Please configure your key in API Keys, or switch to built-in free Edge-TTS in node settings.",
+                openModal: true
+            };
+        }
+    }
+
+    // 3. Check Image Generation node
+    const imgNode = APP.nodes.find(n => n.type === 'image-gen' || n.type === 'gen-image' || n.type === 'visuals');
+    if (imgNode) {
+        const cfg = imgNode.config || imgNode.data || {};
+        const model = (cfg.model || '').toLowerCase();
+
+        if ((model.includes('dall-e') || model.includes('openai')) && !isSet.openai) {
+            return {
+                ok: false,
+                error: "DALL-E 3 image generation requires an OPENAI_API_KEY! Please configure your key in API Keys, or select Pollinations / Free SDXL in node settings.",
+                openModal: true
+            };
+        }
+    }
+
+    return { ok: true };
 }
 
 

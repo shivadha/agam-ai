@@ -369,7 +369,8 @@ def assemble_cinematic_video(
     final_video = final_video.with_duration(total_duration)
 
     # 3. Audio Mixing & Topic-Synced Background Music
-    mix_levels = brain.get_audio_mix()
+    creative_brain = get_creative_brain()
+    mix_levels = creative_brain.get_audio_mix()
     tracks = [audio_clip.with_volume_scaled(mix_levels["voice"])]
     
     # Auto-resolve emotion-matched background music if not explicitly provided
@@ -510,13 +511,16 @@ def assemble_cinematic_video(
     mixed_audio.close()
     
     # Record render in Creative AI Brain for continuous learning
-    brain.record_learning_session(
-        video_id=output_filename,
-        topic=topic_title,
-        viral_score=viral_score,
-        transitions_used=learned_transitions,
-        visual_style="Cinematic High-Retention"
-    )
+    try:
+        creative_brain.record_learning_session(
+            video_id=output_filename,
+            topic=topic_title,
+            viral_score=viral_score,
+            transitions_used=learned_transitions,
+            visual_style="Cinematic High-Retention"
+        )
+    except Exception as brain_err:
+        print(f"[video_assembler] Creative Brain learning note: {brain_err}")
 
     # 5. Multi-Platform Syndication & Social Media Package Generation
     try:

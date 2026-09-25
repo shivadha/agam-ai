@@ -281,9 +281,39 @@ def generate_image(
                 print(f"[image_gen] OK: Direct Gemini Imagen 3 image saved to {output_path}")
                 return output_path
             except Exception as e:
-                print(f"[image_gen] Direct Gemini Imagen 3 failed: {e}. Falling back to Free AI Market...")
+                print(f"[image_gen] Direct Gemini Imagen 3 failed: {e}. Falling back to next...")
 
-    # ── Attempt 3: Free AI Market Router (Pollinations Turbo & Flux-Realism) ─────
+    # ── Attempt 3: HuggingFace Cloud Spaces (FLUX.1-schnell & SD 3.5 Turbo) ──────
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    if hf_token or model_name in ["FLUX.1", "HuggingFace", "SD 3.5"]:
+        try:
+            from gradio_client import Client
+            import shutil
+            print(f"[image_gen] [HuggingFace Space] Generating scene via black-forest-labs/FLUX.1-schnell...")
+            hf_client = Client("black-forest-labs/FLUX.1-schnell", token=hf_token)
+            hf_res = hf_client.predict(
+                prompt=enhanced_prompt[:400],
+                seed=unique_seed % 2147483647,
+                randomize_seed=True,
+                width=min(width, 1024),
+                height=min(height, 1024),
+                num_inference_steps=4,
+                api_name="/infer"
+            )
+            if hf_res and isinstance(hf_res, (tuple, list)) and len(hf_res) > 0:
+                img_val = hf_res[0]
+                img_path = img_val.get("path") if isinstance(img_val, dict) else img_val
+                if img_path and os.path.exists(img_path) and os.path.getsize(img_path) > 1000:
+                    shutil.copyfile(img_path, output_path)
+                    img_hash = _get_image_hash(output_path)
+                    if img_hash:
+                        _used_image_hashes.add(img_hash)
+                    print(f"[image_gen] OK: HuggingFace FLUX.1 image saved to {output_path}")
+                    return output_path
+        except Exception as hf_err:
+            print(f"[image_gen] HuggingFace Space image note: {hf_err}. Continuing to Pollinations...")
+
+    # ── Attempt 4: Free AI Market Router (Pollinations Turbo & Flux-Realism) ─────
     clean_prompt = re.sub(r'[\r\n\t]+', ' ', enhanced_prompt).strip()
     if len(clean_prompt) > 220:
         clean_prompt = clean_prompt[:220]

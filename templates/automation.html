@@ -249,6 +249,9 @@
                     <button class="btn-tb btn-recipe" id="btnViewEditingRecipe" title="View learned video editing recipe">
                         🧠 AI Recipe
                     </button>
+                    <button class="btn-tb" id="btnOpenApiKeysModal" title="Configure Cloud & Local AI Keys (MiniMax, ElevenLabs, ComfyUI, Fal.ai)">
+                        🔑 API Keys
+                    </button>
                     <button class="btn-tb btn-yt-connect" id="btnConnectYoutube" onclick="window.location.href='/youtube/authorize'" title="Connect YouTube account">
                         <span class="yt-icon">▶</span> YouTube
                     </button>
@@ -588,6 +591,163 @@
                     <a id="btnDownloadModalVideo" href="#" download style="padding: 6px 12px; background: linear-gradient(135deg, #0284c7, #38bdf8); border: none; border-radius: 6px; color: #fff; font-weight: 700; font-size: 0.78rem; text-decoration: none; display: flex; align-items: center; gap: 4px;">⬇ Download</a>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- ── API Key Configuration Modal ── -->
+    <div class="modal-overlay hidden" id="apiKeysConfigModal">
+        <div class="modal-box" style="max-width: 760px; max-height: 90vh; background: #0c101c; border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 18px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 64px rgba(0,0,0,0.85), 0 0 35px rgba(56,189,248,0.2);">
+            
+            <!-- Header -->
+            <div class="modal-header" style="padding: 1.2rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; background: rgba(15,23,42,0.6);">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <div style="font-size: 26px; filter: drop-shadow(0 0 8px rgba(251,191,36,0.5));">🔑</div>
+                    <div>
+                        <h2 style="font-family: 'Space Grotesk', sans-serif; font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0; letter-spacing: -0.02em;">
+                            AI Models & Cloud API Keys
+                        </h2>
+                        <p style="font-size: 0.8rem; color: #94a3b8; margin: 3px 0 0;">
+                            Configure keys for Video Gen (MiniMax-H3), Voice (ElevenLabs/Edge-TTS), LLM & ComfyUI
+                        </p>
+                    </div>
+                </div>
+                <button class="modal-close" id="apiKeysModalClose" style="background:none; border:none; color:#94a3b8; font-size:1.4rem; cursor:pointer;">✕</button>
+            </div>
+
+            <!-- Body -->
+            <div style="padding: 1.25rem 1.5rem; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 14px;">
+                
+                <!-- Notice Banner: Pre-flight Protection -->
+                <div style="background: rgba(56,189,248,0.08); border: 1px solid rgba(56,189,248,0.25); border-radius: 10px; padding: 12px 14px; display: flex; align-items: flex-start; gap: 10px;">
+                    <span style="font-size: 1.1rem; flex-shrink: 0; margin-top: 1px;">🛡️</span>
+                    <div style="font-size: 0.8rem; color: #cbd5e1; line-height: 1.45;">
+                        <strong style="color: #38bdf8;">Pre-Flight Execution Guard:</strong> Workflows will strictly validate required services before starting to prevent failures mid-run. If an AI service (MiniMax, ComfyUI, or ElevenLabs) is not reachable or unconfigured, execution is safely halted.
+                    </div>
+                </div>
+
+                <!-- API Keys Grid -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+                    
+                    <!-- MiniMax Video AI -->
+                    <div style="background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 12px 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <label style="font-size: 0.82rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                <span>🎥</span> MiniMax API Key
+                            </label>
+                            <span id="badgeMinimaxKey" style="font-size: 0.68rem; padding: 2px 7px; border-radius: 12px; font-weight: 700; background: rgba(148,163,184,0.15); color: #94a3b8;">Checking...</span>
+                        </div>
+                        <input type="password" id="keyInputMinimax" placeholder="Enter MiniMax API Key" style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.82rem; font-family: monospace;">
+                        <div style="font-size: 0.72rem; color: #64748b; margin-top: 5px;">Used for MiniMax-H3 / Video-01 Image-to-Video generation.</div>
+                    </div>
+
+                    <!-- Fal.ai Key (Cloud alternative) -->
+                    <div style="background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 12px 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <label style="font-size: 0.82rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                <span>⚡</span> Fal.ai Key
+                            </label>
+                            <span id="badgeFalKey" style="font-size: 0.68rem; padding: 2px 7px; border-radius: 12px; font-weight: 700; background: rgba(148,163,184,0.15); color: #94a3b8;">Checking...</span>
+                        </div>
+                        <input type="password" id="keyInputFal" placeholder="Enter FAL_KEY" style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.82rem; font-family: monospace;">
+                        <div style="font-size: 0.72rem; color: #64748b; margin-top: 5px;">Serverless cloud video for MiniMax-H3, Kling & LTX-Video.</div>
+                    </div>
+
+                    <!-- ElevenLabs API Key -->
+                    <div style="background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 12px 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <label style="font-size: 0.82rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                <span>🎙️</span> ElevenLabs API Key
+                            </label>
+                            <span id="badgeElevenKey" style="font-size: 0.68rem; padding: 2px 7px; border-radius: 12px; font-weight: 700; background: rgba(148,163,184,0.15); color: #94a3b8;">Checking...</span>
+                        </div>
+                        <input type="password" id="keyInputElevenlabs" placeholder="Enter ElevenLabs API Key" style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.82rem; font-family: monospace;">
+                        <div style="font-size: 0.72rem; color: #64748b; margin-top: 5px;">10k free chars/mo. If empty or quota limits hit, falls back to Edge-TTS.</div>
+                    </div>
+
+                    <!-- OpenAI Key -->
+                    <div style="background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 12px 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <label style="font-size: 0.82rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                <span>🤖</span> OpenAI API Key
+                            </label>
+                            <span id="badgeOpenaiKey" style="font-size: 0.68rem; padding: 2px 7px; border-radius: 12px; font-weight: 700; background: rgba(148,163,184,0.15); color: #94a3b8;">Checking...</span>
+                        </div>
+                        <input type="password" id="keyInputOpenai" placeholder="sk-..." style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.82rem; font-family: monospace;">
+                        <div style="font-size: 0.72rem; color: #64748b; margin-top: 5px;">Used for GPT-4o story generation and DALL-E 3 image generation.</div>
+                    </div>
+
+                    <!-- Groq Key -->
+                    <div style="background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 12px 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <label style="font-size: 0.82rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                <span>🚀</span> Groq API Key
+                            </label>
+                            <span id="badgeGroqKey" style="font-size: 0.68rem; padding: 2px 7px; border-radius: 12px; font-weight: 700; background: rgba(148,163,184,0.15); color: #94a3b8;">Checking...</span>
+                        </div>
+                        <input type="password" id="keyInputGroq" placeholder="gsk_..." style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.82rem; font-family: monospace;">
+                        <div style="font-size: 0.72rem; color: #64748b; margin-top: 5px;">Free tier ultra-fast Llama 3.3 70B inference.</div>
+                    </div>
+
+                    <!-- Meta Muse Spark Model API -->
+                    <div style="background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 12px 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <label style="font-size: 0.82rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                <span>🧠</span> Meta Muse API Key
+                            </label>
+                            <span id="badgeMuseKey" style="font-size: 0.68rem; padding: 2px 7px; border-radius: 12px; font-weight: 700; background: rgba(148,163,184,0.15); color: #94a3b8;">Checking...</span>
+                        </div>
+                        <input type="password" id="keyInputMuse" placeholder="LLM_..." style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.82rem; font-family: monospace;">
+                        <div style="font-size: 0.72rem; color: #64748b; margin-top: 5px;">Used for Meta Muse Spark 1.3 & 1.2 script intelligence.</div>
+                    </div>
+
+                    <!-- ComfyUI Local Server URL -->
+                    <div style="background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 12px 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <label style="font-size: 0.82rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                <span>🖥️</span> Local ComfyUI Server
+                            </label>
+                            <span id="badgeComfyUrl" style="font-size: 0.68rem; padding: 2px 7px; border-radius: 12px; font-weight: 700; background: rgba(148,163,184,0.15); color: #94a3b8;">Checking...</span>
+                        </div>
+                        <input type="text" id="keyInputComfyUrl" placeholder="http://127.0.0.1:8188" style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.82rem; font-family: monospace;">
+                        <div style="font-size: 0.72rem; color: #64748b; margin-top: 5px;">100% Free local GPU video (LTX-Video / Wan 2.1). Run start_comfyui.bat.</div>
+                    </div>
+
+                </div>
+
+                <!-- Free Alternatives & Guide Panel -->
+                <div style="background: rgba(16,185,129,0.05); border: 1px solid rgba(16,185,129,0.2); border-radius: 12px; padding: 12px 16px;">
+                    <div style="font-size: 0.85rem; font-weight: 700; color: #10b981; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                        <span>💎</span> 100% Free Open-Source Setup Guide (Zero-Cost Video & Audio)
+                    </div>
+                    <div style="font-size: 0.77rem; color: #94a3b8; line-height: 1.5;">
+                        <p style="margin: 0 0 6px;">
+                            • <strong style="color: #f1f5f9;">Free Voice/TTS:</strong> Edge-TTS is already built in! It provides unlimited neural studio voices (Christopher, Jenny, etc.) without any API key or GPU overhead.
+                        </p>
+                        <p style="margin: 0 0 6px;">
+                            • <strong style="color: #f1f5f9;">Free Open-Source Voice Cloning (ElevenLabs Alternatives):</strong> Check out 
+                            <a href="https://github.com/SWivid/F5-TTS" target="_blank" style="color: #38bdf8; text-decoration: underline;">F5-TTS</a> (Flow-Matching SOTA voice cloner, 5s sample) or 
+                            <a href="https://github.com/fishaudio/fish-speech" target="_blank" style="color: #38bdf8; text-decoration: underline;">fish-speech</a>.
+                        </p>
+                        <p style="margin: 0;">
+                            • <strong style="color: #f1f5f9;">Free Local Video Gen:</strong> Launch ComfyUI on port 8188 to render AI videos on your RTX GPU completely free without cloud API fees.
+                        </p>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Footer -->
+            <div style="padding: 12px 1.5rem; background: rgba(15,23,42,0.6); border-top: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
+                <button type="button" id="btnCancelApiKeys" style="padding: 8px 16px; background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: #cbd5e1; font-size: 0.82rem; cursor: pointer;">
+                    Close
+                </button>
+                <div style="display: flex; gap: 10px;">
+                    <button type="button" id="btnSaveApiKeys" style="padding: 8px 20px; background: linear-gradient(135deg, #0284c7, #38bdf8); border: none; border-radius: 8px; color: #fff; font-weight: 700; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 6px; box-shadow: 0 4px 14px rgba(56,189,248,0.3);">
+                        <span>💾</span> Save & Activate Keys
+                    </button>
+                </div>
+            </div>
+
         </div>
     </div>
 

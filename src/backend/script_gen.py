@@ -88,12 +88,21 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
         f"- Target Duration: {target_length} SECONDS (MUST BE AT LEAST 30 SECONDS).\n"
         f"- Total Spoken Words: Between {word_count_min} and {word_count_max} words.\n"
         f"- Total Scenes: {scene_count_target} scenes. Each scene duration between 4.0 and 5.5 seconds.\n\n"
-        f"STORYTELLING & RETENTION LOOP STRUCTURE:\n"
-        f"1. THE SCROLL-STOPPING HOOK (Scenes 1-2): Immediate dramatic mystery or shocking premise without any greetings.\n"
-        f"2. THE DEEPENING STAKES (Scenes 3-4): The hidden story, data, secret mechanism, or crisis.\n"
-        f"3. THE BREAKTHROUGH / TWIST (Scenes 5-6): The turning point, breakthrough discovery, or unexpected reality.\n"
-        f"4. THE SEAMLESS RETENTION LOOP (Final Scene): Deliver a powerful climax where the final words connect seamlessly into Scene 1's hook sentence for an infinite replay loop.\n\n"
-        f"CRITICAL VISUAL & MOTION INSTRUCTIONS FOR EVERY SCENE (Aesthetic: {visual_style}):\n"
+        f"MANDATORY ARCHITECTURE — TITLE SCENE & CONNECTING SCENES:\n"
+        f"1. SCENE 1 (THE TITLE HERO SCENE):\n"
+        f"   - Must serve as the Title Visual Hook. Its 'image_prompt' must be a jaw-dropping, iconic visual embodiment of the Topic Title: '{topic_title}'.\n"
+        f"   - Its 'image_to_video_prompt' must be an attention-grabbing dynamic camera motion (e.g. 'cinematic push-in with volumetric lighting flare, 4k 60fps') that brings the title to life in the first 2 seconds.\n"
+        f"   - 'scene_type': 'title_hero'\n\n"
+        f"2. CONNECTING SCENE CONTINUITY (SCENES 2 TO {scene_count_target}):\n"
+        f"   - EVERY subsequent scene MUST logically and visually connect to the previous scene ('connected_from' anchor).\n"
+        f"   - Maintain identical character appearance, environment lighting, cinematic color grading, and smooth camera momentum from scene to scene.\n"
+        f"   - Never generate disconnected, random clips. Each scene must carry the visual narrative forward seamlessly.\n\n"
+        f"3. THE SEAMLESS RETENTION LOOP (FINAL SCENE):\n"
+        f"   - Deliver a powerful climax where the final words connect seamlessly into Scene 1's hook sentence for an infinite replay loop.\n\n"
+        f"CRITICAL PER-SCENE JSON SCHEMA (Aesthetic: {visual_style}):\n"
+        f"- 'scene_number': Integer (1, 2, ...)\n"
+        f"- 'scene_type': 'title_hero' for Scene 1, 'connecting_story' for subsequent scenes.\n"
+        f"- 'connected_from': Visual bridge from previous scene (e.g. 'Continuing from Scene 1 camera push, now tracking subject...').\n"
         f"- 'narration': Voiceover sentence (10-16 words per scene).\n"
         f"- 'image_prompt': Hyper-realistic, 8k cinematic visual description tailored to '{visual_style}' style. "
         f"Describe subject, dramatic lighting (volumetric, neon rim, golden hour, moody chiaroscuro), atmosphere, environment, 9:16 vertical aspect ratio.\n"
@@ -103,14 +112,14 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
         f"- 'transition_type': One of: 'whip_pan', 'glitch_flash', 'zoom_burst_in', 'speed_ramp', 'motion_blur_push', 'parallax_slide', 'white_flash'.\n"
         f"- 'emotion': One of: 'epic', 'suspenseful', 'dark', 'tech', 'energetic', 'curiosity'.\n\n"
         f"Return ONLY valid raw JSON with keys:\n"
-        f'{{"title": "...", "description": "...", "tags": [...], "script": "...", "overall_emotion": "epic", "visual_style": "{visual_style}", "scenes": [...]}}'
+        f'{{"title": "{topic_title}", "description": "...", "tags": [...], "script": "...", "overall_emotion": "epic", "visual_style": "{visual_style}", "scenes": [...]}}'
     )
     
     user_prompt = (
-        f"Topic: {topic_title}\n"
+        f"Topic Title: {topic_title}\n"
         f"{('Additional Context: ' + custom_prompt) if custom_prompt else ''}\n"
         f"Target Duration: {target_length} seconds (Must exceed 30 seconds).\n"
-        f"Synthesize the script first with a seamless loop, then detailed scene image prompts, motion prompts, and audio sound design."
+        f"Generate Scene 1 as the Title Hero scene with dedicated title image and image-to-video motion, followed by visually connected scenes."
     )
 
     content_str = None
@@ -140,56 +149,84 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
                 content_str = resp.json()["choices"][0]["message"]["content"]
                 print(f"[script_gen] [SUCCESS] GPT-6 Astra script synthesized successfully!")
             elif resp.status_code == 429 and "card_required" in resp.text:
-                print(f"[script_gen] [Astra Info] Card verification required on experientiallabs.ai to activate platform credits. Falling back to local/free model...")
+                print(f"[script_gen] [Astra Info] Card verification required on experientiallabs.ai to activate platform credits. Falling back to next...")
             else:
                 print(f"[script_gen] Astra HTTP {resp.status_code}: {resp.text[:120]}. Falling back...")
         except Exception as astra_ex:
             print(f"[script_gen] Experiential Astra note: {astra_ex}. Falling back...")
 
-    # 2. Local Ollama if requested OR if Astra failed / not used and local Ollama is active
-    if not content_str:
-        is_ollama = "ollama" in model_name.lower() or any(m in model_name.lower() for m in ["shivam-pro", "deepseek", "qwen"])
-        if not is_ollama and not custom_api_key:
-            try:
-                chk = requests.get("http://localhost:11434/api/tags", timeout=1.5)
-                if chk.status_code == 200:
-                    is_ollama = True
-                    model_name = "qwen2.5-coder:7b"
-                    print(f"[script_gen] [100% FREE AI] Detected active local Ollama! Auto-routing to local '{model_name}'.")
-            except Exception:
-                pass
+    # 2. If user explicitly requested local Ollama
+    is_explicit_ollama = any(k in model_name.lower() for k in ["ollama", "shivam-pro", "deepseek", "qwen2.5-coder", "local"])
+    if not content_str and is_explicit_ollama:
+        print(f"[script_gen] Explicit Ollama model selected: {model_name}")
+        content_str = _generate_ollama(model_name, system_prompt, user_prompt)
 
-        if is_ollama:
-            content_str = _generate_ollama(model_name, system_prompt, user_prompt)
+    # 2.5. Meta Muse Spark Model API
+    muse_key = clean_key if ("muse" in model_name.lower() or clean_key.startswith("LLM_")) else (os.environ.get("MUSE_API_KEY", "").strip() or os.environ.get("META_API_KEY", "").strip() or (clean_key if clean_key.startswith("LLM_") else ""))
+    if not content_str and (("muse" in model_name.lower() or clean_key.startswith("LLM_")) or muse_key):
+        print("[script_gen] Routing to Meta Muse Spark Model API...")
+        muse_models = ["muse-spark-1.3", "muse-spark-1.3-contributor", "muse-spark-1.2", "muse-spark-1.1"]
+        for m_model in muse_models:
+            try:
+                m_resp = requests.post(
+                    "https://api.meta.ai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {muse_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": m_model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        "temperature": 0.7
+                    },
+                    timeout=30
+                )
+                if m_resp.status_code == 200:
+                    content_str = m_resp.json()["choices"][0]["message"]["content"]
+                    print(f"[script_gen] [OK] Successfully generated script using Meta Muse Spark ({m_model})!")
+                    break
+                else:
+                    print(f"[script_gen] Meta Muse ({m_model}) HTTP {m_resp.status_code}: {m_resp.text[:120]}")
+            except Exception as m_err:
+                print(f"[script_gen] Meta Muse attempt failed ({m_model}): {m_err}")
 
-    # 3. Direct OpenAI / Gemini if custom key provided
-    if not content_str and clean_key:
-        is_openai = "GPT" in model_name or "gpt" in model_name
-        is_gemini = "Gemini" in model_name or "gemini" in model_name
-        if is_openai:
-            print("[script_gen] Using Direct OpenAI API...")
+    # 3. Groq Fast Cloud API (Free & ultra-fast ~800 tokens/sec)
+    groq_key = clean_key if ("groq" in model_name.lower()) else (os.environ.get("GROQ_API_KEY", "").strip() or clean_key)
+    if not content_str and groq_key:
+        print("[script_gen] Routing to Groq Fast Inference API...")
+        groq_models = ["qwen/qwen3.8-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b"]
+        for g_model in groq_models:
             try:
-                headers = {
-                    "Authorization": f"Bearer {clean_key}",
-                    "Content-Type": "application/json"
-                }
-                payload = {
-                    "model": "gpt-4o",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    "response_format": {"type": "json_object"}
-                }
-                resp = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=45)
-                resp.raise_for_status()
-                content_str = resp.json()["choices"][0]["message"]["content"]
-            except Exception as ex:
-                print(f"[script_gen] Direct OpenAI failed: {ex}. Falling back...")
-        elif is_gemini:
-            print("[script_gen] Using Direct Google Gemini API...")
+                g_resp = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": g_model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.7
+                    },
+                    timeout=30
+                )
+                if g_resp.status_code == 200:
+                    content_str = g_resp.json()["choices"][0]["message"]["content"]
+                    print(f"[script_gen] [OK] Successfully generated script using Groq ({g_model})!")
+                    break
+                else:
+                    print(f"[script_gen] Groq ({g_model}) HTTP {g_resp.status_code}: {g_resp.text[:120]}")
+            except Exception as g_err:
+                print(f"[script_gen] Groq attempt failed ({g_model}): {g_err}")
+
+    # 4. Google Gemini API (Free tier from Jio / Google AI Studio)
+    gemini_key = clean_key if ("gemini" in model_name.lower()) else (os.environ.get("GEMINI_API_KEY", "").strip() or clean_key)
+    if not content_str and gemini_key:
+        print("[script_gen] Routing to Google Gemini API (gemini-2.0-flash)...")
+        for gem_model in ["gemini-2.0-flash", "gemini-1.5-flash"]:
             try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={custom_api_key}"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{gem_model}:generateContent?key={gemini_key}"
                 headers = {"Content-Type": "application/json"}
                 payload = {
                     "contents": [
@@ -205,13 +242,45 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
                     }
                 }
                 resp = requests.post(url, headers=headers, json=payload, timeout=45)
-                resp.raise_for_status()
-                result_json = resp.json()
-                content_str = result_json["candidates"][0]["content"]["parts"][0]["text"]
+                if resp.status_code == 200:
+                    result_json = resp.json()
+                    content_str = result_json["candidates"][0]["content"]["parts"][0]["text"]
+                    print(f"[script_gen] [OK] Successfully generated script using Gemini ({gem_model})!")
+                    break
+                else:
+                    print(f"[script_gen] Gemini ({gem_model}) HTTP {resp.status_code}: {resp.text[:120]}")
             except Exception as ex:
-                print(f"[script_gen] Direct Gemini failed: {ex}. Falling back...")
+                print(f"[script_gen] Direct Gemini failed ({gem_model}): {ex}. Trying next...")
 
-    # 3. Free Online Pollinations Text AI Engine
+    # 5. OpenAI API
+    openai_key = clean_key if ("gpt" in model_name.lower()) else (os.environ.get("OPENAI_API_KEY", "").strip() or clean_key)
+    if not content_str and openai_key:
+        print("[script_gen] Routing to OpenAI API (gpt-4o)...")
+        for o_model in ["gpt-4o", "gpt-4o-mini"]:
+            try:
+                headers = {
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": o_model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "response_format": {"type": "json_object"}
+                }
+                resp = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload, timeout=45)
+                if resp.status_code == 200:
+                    content_str = resp.json()["choices"][0]["message"]["content"]
+                    print(f"[script_gen] [OK] Successfully generated script using OpenAI ({o_model})!")
+                    break
+                else:
+                    print(f"[script_gen] OpenAI ({o_model}) HTTP {resp.status_code}: {resp.text[:120]}")
+            except Exception as ex:
+                print(f"[script_gen] Direct OpenAI failed: {ex}. Falling back...")
+
+    # 6. Free Online Pollinations Text AI Engine
     if not content_str:
         print(f"[script_gen] Routing via Free Zero-Key AI Engine for '{topic_title}'...")
         try:
@@ -228,11 +297,11 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
             )
             if poll_resp.ok and poll_resp.text:
                 content_str = poll_resp.text
-                print(f"[script_gen] [OK] Successfully synthesized custom AI director script.")
+                print(f"[script_gen] [OK] Successfully synthesized custom AI director script via Pollinations.")
         except Exception as poll_err:
             print(f"[script_gen] Free AI Engine note: {poll_err}")
 
-    # Parse JSON if available
+    # Parse and validate JSON
     if content_str:
         try:
             cleaned_str = content_str.strip()
@@ -244,17 +313,25 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
             
             content_json = json.loads(cleaned_str)
             raw_scenes = content_json.get("scenes", [])
-            if len(raw_scenes) >= 4:
-                # Ensure each scene has rich image prompt and img-to-video prompt
+            if len(raw_scenes) >= 3:
+                # Ensure each scene has rich, contextual image_prompt and img-to-video prompt
                 for s_idx, sc in enumerate(raw_scenes):
+                    narr = sc.get("narration") or f"Scene {s_idx+1} about {topic_title}"
                     if not sc.get("image_prompt"):
-                        sc["image_prompt"] = f"Cinematic 8k photorealistic vertical visual depicting {sc.get('narration', topic_title)}, dramatic volumetric lighting, ultra-detailed 9:16"
+                        sc["image_prompt"] = (
+                            f"Cinematic photorealistic 8k vertical shot depicting {narr}. "
+                            f"Dramatic volumetric lighting, hyper-detailed environment, movie still, 9:16 vertical aspect ratio"
+                        )
                     if not sc.get("image_to_video_prompt"):
-                        sc["image_to_video_prompt"] = "Cinematic slow zoom into subject with floating ambient particles and volumetric light rays"
+                        sc["image_to_video_prompt"] = (
+                            f"Cinematic slow camera push-in focusing on {narr[:60]}, atmospheric lighting rays and subtle organic movement"
+                        )
                     if not sc.get("duration"):
                         sc["duration"] = 5.0
+                    sc["scene_number"] = s_idx + 1
                 
                 full_script = content_json.get("script") or " ".join([s.get("narration", "") for s in raw_scenes])
+                print(f"[script_gen] [SUCCESS] AI generated {len(raw_scenes)} custom context-specific scenes for: '{topic_title}'!")
                 return {
                     "title": content_json.get("title", topic_title),
                     "script": full_script,
@@ -264,91 +341,15 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
                     "tags": content_json.get("tags", ["Shorts", "Viral", "Trending", "AI"])
                 }
         except Exception as err:
-            print(f"[script_gen] JSON Parsing note: {err}. Building guaranteed 30s+ director script...")
+            print(f"[script_gen] JSON Parsing failed: {err}. Raw response was: {content_str[:200]}")
 
-    # Guaranteed 30s+ High-Retention Director Script tailored specifically to topic_title
-    print(f"[script_gen] Synthesizing comprehensive 32-second director script for: '{topic_title}'...")
-    safe_topic = topic_title.strip()
-    
-    fallback_scenes = [
-        {
-            "scene_number": 1,
-            "narration": f"This is the untold story behind {safe_topic} that almost nobody is talking about.",
-            "duration": 5.2,
-            "image_prompt": f"Dramatic cinematic opening shot of {safe_topic}, ominous storm atmosphere, hyper-realistic 8k, volumetric rays, neon rim lighting, 9:16 vertical",
-            "image_to_video_prompt": "Slow cinematic dolly zoom in with atmospheric smoke drifting across the screen",
-            "subtitle_text": "THE UNTOLD STORY",
-            "sfx": "rise",
-            "transition_type": "zoom_burst_in",
-            "emotion": "suspenseful"
-        },
-        {
-            "scene_number": 2,
-            "narration": "Behind closed doors, a massive breakthrough was unfolding that caught everyone off guard.",
-            "duration": 5.0,
-            "image_prompt": f"Secret laboratory and high-tech command center researching {safe_topic}, glowing holographic blueprints, deep blue and cyan lighting, vertical 9:16",
-            "image_to_video_prompt": "Whip pan left across high-tech holographic displays with digital glimmers",
-            "subtitle_text": "MASSIVE BREAKTHROUGH",
-            "sfx": "impact",
-            "transition_type": "whip_pan",
-            "emotion": "tech"
-        },
-        {
-            "scene_number": 3,
-            "narration": "What seemed impossible just months ago has now shattered previous industry standards.",
-            "duration": 5.4,
-            "image_prompt": f"Shattered glass barrier with glowing golden quantum energy bursts illuminating {safe_topic}, ultra-detailed 8k, vertical 9:16",
-            "image_to_video_prompt": "Fast speed ramp with glowing energy burst exploding outwards",
-            "subtitle_text": "STANDARDS SHATTERED",
-            "sfx": "glitch",
-            "transition_type": "glitch_flash",
-            "emotion": "epic"
-        },
-        {
-            "scene_number": 4,
-            "narration": "The data reveals an exponential surge, changing the landscape faster than predicted.",
-            "duration": 5.2,
-            "image_prompt": f"Futuristic exponential glowing growth charts and neural network nodes analyzing {safe_topic}, hyper-detailed dark aesthetic, vertical 9:16",
-            "image_to_video_prompt": "Parallax slide motion across glowing neural nodes and data streams",
-            "subtitle_text": "EXPONENTIAL SURGE",
-            "sfx": "rise",
-            "transition_type": "parallax_slide",
-            "emotion": "epic"
-        },
-        {
-            "scene_number": 5,
-            "narration": "Experts agree that this marks a turning point you simply cannot afford to ignore.",
-            "duration": 5.0,
-            "image_prompt": f"Silhouette of visionary innovators looking towards an illuminated futuristic city skyline for {safe_topic}, golden hour, vertical 9:16",
-            "image_to_video_prompt": "Smooth forward camera glide with golden lens flares spreading across the frame",
-            "subtitle_text": "TURNING POINT",
-            "sfx": "impact",
-            "transition_type": "white_flash",
-            "emotion": "epic"
-        },
-        {
-            "scene_number": 6,
-            "narration": "Subscribe now and comment below to stay ahead of the next major wave!",
-            "duration": 4.8,
-            "image_prompt": f"Epic victory emblem glowing with neon pulse and particle fire, cinematic clean finish, vertical 9:16",
-            "image_to_video_prompt": "Camera punch zoom with glowing particle sparks and pulse wave",
-            "subtitle_text": "SUBSCRIBE NOW",
-            "sfx": "chime",
-            "transition_type": "motion_blur_push",
-            "emotion": "energetic"
-        }
-    ]
-    
-    total_dur = sum(s["duration"] for s in fallback_scenes)
-    print(f"[script_gen] [OK] Script generated with {len(fallback_scenes)} scenes, total duration: {total_dur:.1f}s.")
-    
-    return {
-        "title": safe_topic,
-        "script": " ".join([s["narration"] for s in fallback_scenes]),
-        "scenes": fallback_scenes,
-        "overall_emotion": "epic",
-        "description": f"Deep-dive breakdown into {safe_topic}. Explore how this event is changing everything.",
-        "tags": ["Shorts", "Trending", "AI", safe_topic.replace(' ', '')[:15]]
-    }
+    # FAIL-FAST: No generic hardcoded dummy templates!
+    # If script generation is not done, DO NOT start the next process.
+    err_msg = (
+        f"AI Script Generation Failed: No connected AI model could produce a context-aware script for '{topic_title}'. "
+        f"Please check your API key / model settings and test the live connection before running."
+    )
+    print(f"[script_gen] [CRITICAL ERROR] {err_msg}")
+    raise RuntimeError(err_msg)
 
 

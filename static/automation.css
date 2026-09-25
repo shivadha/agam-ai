@@ -1093,6 +1093,14 @@
     background-size: 200% 100%;
     animation: progShimmer 1.2s linear infinite;
 }
+.cn-prog-fill.success {
+    background: #10b981 !important;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.8) !important;
+}
+.cn-prog-fill.failed {
+    background: #ef4444 !important;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.8) !important;
+}
 @keyframes progShimmer {
     from { background-position: 200% 50%; }
     to   { background-position: -200% 50%; }
@@ -1105,7 +1113,8 @@
     display: flex; justify-content: space-between;
 }
 .cn-prog-label.running { color: #fbbf24; }
-.cn-prog-label.success { color: #34d399; }
+.cn-prog-label.success { color: #10b981 !important; font-weight: 600; }
+.cn-prog-label.failed  { color: #ef4444 !important; }
 
 /* PORT CIRCLES */
 .cn-port {
@@ -2101,4 +2110,15 @@ select option:checked,
     color: var(--text-muted);
     margin-top: auto;
 }
+
+/* ─── Spin animation for test connection button ─── */
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.spin { display: inline-block; animation: spin 0.9s linear infinite; }
+.pc-btn-test-conn:hover {
+    background: linear-gradient(135deg, rgba(0,255,170,0.2), rgba(56,189,248,0.2)) !important;
+    border-color: rgba(0,255,170,0.6) !important;
+    box-shadow: 0 0 10px rgba(0,255,170,0.18);
+    transform: translateY(-1px);
+}
+
 

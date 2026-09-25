@@ -72,13 +72,19 @@ class WorkflowEngine:
                     print(f"[WorkflowEngine] Callback error (start): {cb_err}")
             
             self.execute_node(node)
+            res = self.state.get(node_id) or {}
             
             if self.on_node_status:
                 try:
-                    res = self.state.get(node_id) or {}
                     self.on_node_status(node_id, res.get('status', 'success'), res)
                 except Exception as cb_err:
                     print(f"[WorkflowEngine] Callback error (end): {cb_err}")
+
+            # CRITICAL SAFETY HALT: If any core node failed, STOP execution immediately!
+            if res.get('status') == 'error':
+                err_msg = res.get('error', 'Unknown error')
+                print(f"[WorkflowEngine] CRITICAL HALT: Node {node_id} ({node.get('type')}) failed: {err_msg}. Aborting remaining pipeline nodes.", flush=True)
+                break
             
         return self.state.get_all()
 
@@ -175,17 +181,21 @@ class WorkflowEngine:
                     visual_style=visual_style
                 )
                 
+                scenes_list = (script_data.get('scenes') if script_data else []) or []
+                if not script_data or len(scenes_list) < 3:
+                    raise ValueError(f"Script generation failed: Expected at least 3 valid story scenes for '{topic_title}', but received {len(scenes_list)}. Check your AI model API connection.")
+                
                 result = {
                     "status": "success",
                     "node_type": node_type,
                     "topic": topic_title,
                     "topic_title": topic_title,
                     "visual_style": visual_style,
-                    "title": script_data.get('title'),
-                    "script": script_data.get('script'),
-                    "scenes": script_data.get('scenes', []),
-                    "description": script_data.get('description'),
-                    "tags": script_data.get('tags')
+                    "title": script_data.get('title', topic_title),
+                    "script": script_data.get('script', ''),
+                    "scenes": scenes_list,
+                    "description": script_data.get('description', ''),
+                    "tags": script_data.get('tags', [])
                 }
 
             elif node_type == 'gen-title':
@@ -217,9 +227,11 @@ class WorkflowEngine:
                     script_text = found_script
                         
                 voice = node_data.get('voice', 'en-US-ChristopherNeural')
+                provider = node_data.get('provider', 'auto')
+                api_key = node_data.get('api_key', '')
                 output_path = node_data.get('output_path', os.path.join(OUTPUT_DIR, f"audio_{node_id}.mp3"))
                 
-                audio_path, vtt_path = generate_audio(script_text, output_path, voice)
+                audio_path, vtt_path = generate_audio(script_text, output_path, voice=voice, provider=provider, api_key=api_key)
                 if not audio_path:
                     raise ValueError("Audio generation failed")
                     

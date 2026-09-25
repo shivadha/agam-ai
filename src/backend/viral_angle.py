@@ -255,6 +255,28 @@ def extract_viral_angle(
             except Exception as ex:
                 print(f"[viral_angle] Direct Gemini failed: {ex}. Falling back...")
 
+        elif "muse" in model_name.lower() or custom_api_key.startswith("LLM_"):
+            print("[viral_angle] Using Meta Muse Spark API...")
+            for m_model in ["muse-spark-1.3", "muse-spark-1.3-contributor", "muse-spark-1.2"]:
+                try:
+                    resp = requests.post(
+                        "https://api.meta.ai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {custom_api_key}", "Content-Type": "application/json"},
+                        json={
+                            "model": m_model,
+                            "messages": [
+                                {"role": "system", "content": VIRAL_ANGLE_SYSTEM_PROMPT},
+                                {"role": "user", "content": user_prompt},
+                            ],
+                        },
+                        timeout=30,
+                    )
+                    if resp.status_code == 200:
+                        content_str = resp.json()["choices"][0]["message"]["content"]
+                        break
+                except Exception as ex:
+                    print(f"[viral_angle] Meta Muse ({m_model}) failed: {ex}")
+
     # ------------------------------------------------------------------
     # 2. Fall back to OpenRouter
     # ------------------------------------------------------------------
