@@ -763,6 +763,56 @@ def api_shorts_status(job_id):
     return jsonify({"status": "success", "job": job})
 
 
+_clips_jobs = {}
+_clips_lock = threading.Lock()
+
+
+@app.route('/api/clips/make', methods=['POST'])
+@login_required
+def api_clips_make():
+    """Make viral 9:16 clips with word-highlight (karaoke) subtitles. Background thread."""
+    data = request.get_json() or {}
+    video_path = (data.get('video_path') or '').strip()
+    if not video_path or not os.path.exists(video_path):
+        return jsonify({"status": "error", "message": "Provide a valid 'video_path'."}), 400
+    job_id = "clips-" + datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+    num, lo, hi = (int(data.get('num_clips') or 3), float(data.get('min_sec') or 20),
+                   float(data.get('max_sec') or 58))
+    style = (data.get('style') or 'karaoke').strip().lower()
+    if style not in ('karaoke', 'classic'):
+        style = 'karaoke'
+    highlight = (data.get('highlight') or 'yellow').strip().lower()
+    face_track = str(data.get('face_track', 'true')).lower() not in ('false', '0', 'no')
+    out_dir = os.path.join(OUTPUT_DIR, f"clips_{job_id}")
+    with _clips_lock:
+        _clips_jobs[job_id] = {"status": "running", "result": None, "error": None}
+
+    def _run():
+        try:
+            from src.backend.clipper import make_clips
+            clips = make_clips(video_path, out_dir, num_clips=num, min_sec=lo,
+                               max_sec=hi, style=style, highlight=highlight,
+                               face_track=face_track)
+            with _clips_lock:
+                _clips_jobs[job_id] = {"status": "done", "result": clips, "error": None}
+        except Exception as e:
+            with _clips_lock:
+                _clips_jobs[job_id] = {"status": "error", "result": None, "error": str(e)}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "queued", "job_id": job_id})
+
+
+@app.route('/api/clips/status/<job_id>')
+@login_required
+def api_clips_status(job_id):
+    with _clips_lock:
+        job = _clips_jobs.get(job_id)
+    if not job:
+        return jsonify({"status": "error", "message": "Unknown job id."}), 404
+    return jsonify({"status": "success", "job": job})
+
+
 @app.route('/api/repurpose/export', methods=['POST'])
 @login_required
 def api_repurpose_export():

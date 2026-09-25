@@ -81,6 +81,7 @@ const NDEFS = {
     'add-music':        { label:'Add Music (Ducked)',    icon:'🎧',  cat:'media',    color:'#0d9488', execMs:3000 },
     'fetch-broll':      { label:'Fetch B-Roll',          icon:'🎞',  cat:'media',    color:'#0d9488', execMs:4000 },
     'cut-shorts':       { label:'Cut Viral Shorts',      icon:'✂️',  cat:'media',    color:'#0d9488', execMs:6000 },
+    'make-clips':        { label:'Make Viral Clips 🎯',   icon:'🎯',  cat:'media',    color:'#0d9488', execMs:9000 },
     'repurpose':        { label:'Repurpose (9:16/1:1)',  icon:'🔁',  cat:'media',    color:'#0d9488', execMs:4000 },
     'schedule-upload':  { label:'Schedule Upload',       icon:'🗓',  cat:'platform', color:'#0ea5e9', execMs:1500 },
     // ── Logic
@@ -218,6 +219,14 @@ const NODE_CONFIGS = {
     ],
     'cut-shorts': [
         { key:'num_shorts', label:'Number of Shorts', type:'select', opts:['1','2','3','4','5'], def:'3' },
+        { key:'min_sec',    label:'Min Length (sec)', type:'text', placeholder:'20', def:'20' },
+        { key:'max_sec',    label:'Max Length (sec)', type:'text', placeholder:'58', def:'58' },
+    ],
+    'make-clips': [
+        { key:'num_clips',  label:'Number of Clips', type:'select', opts:['1','2','3','4','5'], def:'3' },
+        { key:'style',      label:'Caption Style', type:'select', opts:['karaoke','classic'], def:'karaoke' },
+        { key:'highlight',  label:'Highlight Colour', type:'select', opts:['yellow','lime','cyan','orange','pink'], def:'yellow' },
+        { key:'face_track', label:'Face-Tracked Reframe', type:'toggle', def:true },
         { key:'min_sec',    label:'Min Length (sec)', type:'text', placeholder:'20', def:'20' },
         { key:'max_sec',    label:'Max Length (sec)', type:'text', placeholder:'58', def:'58' },
     ],
@@ -4348,6 +4357,10 @@ function growthTabHtml(tab) {
             return _gLbl('Finished video path') + _gIn('ghVideo', '/path/to/final_video.mp4') +
                 _gLbl('Number of shorts') +
                 `<select id="ghNum" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px;color:#fff;"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select>` +
+                _gLbl('Caption style') +
+                `<select id="ghStyle" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px;color:#fff;"><option value="karaoke" selected>🔥 Karaoke (word highlight)</option><option value="classic">Classic (phrase)</option></select>` +
+                _gLbl('Highlight colour') +
+                `<select id="ghHl" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px;color:#fff;"><option value="yellow" selected>Yellow</option><option value="lime">Lime</option><option value="cyan">Cyan</option><option value="orange">Orange</option><option value="pink">Pink</option></select>` +
                 _gBtn('ghRun', '✂️ Cut Viral Shorts') + _gRes('ghOut');
         case 'schedule':
             return _gLbl('Queue') + _gBtn('guRefresh', '↻ Refresh Queue') + _gRes('guList') +
@@ -4487,18 +4500,26 @@ function _growthWireTab(tab) {
         $('ghRun').addEventListener('click', async () => {
             busy('ghOut', 'Cutting shorts (background job)…');
             try {
-                const r = await fetch('/api/shorts/cut', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ video_path: $('ghVideo').value, num_shorts: $('ghNum').value }) });
+                const useKaraoke = $('ghStyle') && $('ghStyle').value === 'karaoke';
+                const cutUrl = useKaraoke ? '/api/clips/make' : '/api/shorts/cut';
+                const statusBase = useKaraoke ? '/api/clips/status/' : '/api/shorts/status/';
+                if (useKaraoke) busy('ghOut', 'Making karaoke clips (background job)…');
+                const body = useKaraoke
+                    ? { video_path: $('ghVideo').value, num_clips: $('ghNum').value, style: 'karaoke',
+                        highlight: $('ghHl') ? $('ghHl').value : 'yellow', face_track: true }
+                    : { video_path: $('ghVideo').value, num_shorts: $('ghNum').value };
+                const r = await fetch(cutUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body) });
                 const d = await r.json();
                 if (d.status !== 'queued') throw new Error(d.message || 'failed');
                 const poll = async () => {
-                    const s = await (await fetch('/api/shorts/status/' + d.job_id)).json();
+                    const s = await (await fetch(statusBase + d.job_id)).json();
                     const job = s.job || {};
                     if (job.status === 'done') {
                         clearInterval(_shortsPollTimer); _shortsPollTimer = null;
                         $('ghOut').innerHTML = (job.result || []).map(x =>
                             `<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);color:#10b981;">✅ ${escHtml(x.path || '')}</div>`).join('')
-                            || '<div style="color:#94a3b8;">Done — no shorts cut (check video length).</div>';
+                            || '<div style="color:#94a3b8;">Done — no clips cut (check video length).</div>';
                     } else if (job.status === 'error') {
                         clearInterval(_shortsPollTimer); _shortsPollTimer = null;
                         $('ghOut').innerHTML = `<div style="color:#f87171;">Error: ${escHtml(job.error || 'unknown')}</div>`;

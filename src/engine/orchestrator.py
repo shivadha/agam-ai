@@ -690,6 +690,25 @@ class WorkflowEngine:
                           "shorts": shorts,
                           "short_paths": [s["path"] for s in shorts]}
 
+            elif node_type == 'make-clips':
+                from src.backend.clipper import make_clips
+                video_path = node_data.get('video_path') or self._find_in_state('video_path')
+                if not video_path or not os.path.exists(str(video_path)):
+                    raise ValueError("make-clips needs a video_path — connect it after assemble-video.")
+                clips = make_clips(
+                    str(video_path),
+                    os.path.join(OUTPUT_DIR, f"clips_{node_id}"),
+                    num_clips=int(node_data.get('num_clips', 3) or 3),
+                    min_sec=float(node_data.get('min_sec', 20) or 20),
+                    max_sec=float(node_data.get('max_sec', 58) or 58),
+                    style=(node_data.get('style') or 'karaoke'),
+                    highlight=(node_data.get('highlight') or 'yellow'),
+                    face_track=str(node_data.get('face_track', 'true')).lower() not in ('false', '0', 'no'),
+                )
+                result = {"status": "success", "node_type": node_type,
+                          "clips": clips,
+                          "clip_paths": [c["path"] for c in clips]}
+
             elif node_type == 'repurpose':
                 from src.backend.repurpose import export_all
                 video_path = node_data.get('video_path') or self._find_in_state('video_path')
