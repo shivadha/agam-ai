@@ -127,10 +127,46 @@ def delete_provider(provider_id: str) -> bool:
             conn.close()
 
 
-def pick_provider(kind: str, prefer_id: str | None = None) -> dict | None:
-    """Pick the best enabled provider for a kind with balance remaining."""
+def set_candidate_status(candidate_id: int, status: str) -> bool:
+    """Set a candidate's status (used by auto-provisioning).
+
+    Statuses: pending, approved, rejected, needs_verification,
+    needs_manual, provision_failed.
+    """
+    with _db_lock:
+        conn = get_db()
+        try:
+            cur = conn.execute("UPDATE free_candidates SET status = ? WHERE id = ?",
+                               (status, candidate_id))
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def ranked_providers(kind: str) -> list:
+    """All usable providers for a kind, best-first.
+
+    Ordering mirrors pick_provider's ranking: providers with a known
+    positive (or unknown) balance come before zero-balance ones, then by
+    priority. This is the A -> B -> C fallback chain the background agent
+    walks when the first option fails.
+    """
     providers = [p for p in list_providers(include_disabled=False)
                  if kind in p["kinds"] and p["status"] == "active"]
+
+    def rank(p):
+        bal = p["balance"]
+        has = 0 if (bal is None or bal > 0) else 1
+        return (has, p["priority"])
+
+    providers.sort(key=rank)
+    return providers
+
+
+def pick_provider(kind: str, prefer_id: str | None = None) -> dict | None:
+    """Pick the best enabled provider for a kind with balance remaining."""
+    providers = ranked_providers(kind)
     if prefer_id:
         # Explicit pin: return it only if usable, else None (fail loud —
         # never silently swap a provider the user pinned).
@@ -139,11 +175,6 @@ def pick_provider(kind: str, prefer_id: str | None = None) -> dict | None:
                 return p
         return None
     # Prefer providers with a known positive balance, then unknown, by priority.
-    def rank(p):
-        bal = p["balance"]
-        has = 0 if (bal is None or bal > 0) else 1
-        return (has, p["priority"])
-    providers.sort(key=rank)
     return providers[0] if providers else None
 
 
@@ -250,6 +281,7 @@ def approve_candidate(candidate_id: int, provider_id: str | None = None,
 
 
 def reject_candidate(candidate_id: int) -> bool:
+    """Mark a candidate rejected (admin dismissed it)."""
     with _db_lock:
         conn = get_db()
         try:

@@ -951,6 +951,31 @@ def api_free_scout_run():
     return jsonify({"status": "success", **result})
 
 
+@app.route('/api/free/config', methods=['GET'])
+@login_required
+def api_free_config_get():
+    """Free-agent config: signup email for auto-provisioning etc."""
+    from src.backend import free_provision
+    cfg = free_provision.get_config()
+    return jsonify({"status": "success",
+                    "signup_email": cfg.get("signup_email") or ""})
+
+
+@app.route('/api/free/config', methods=['POST'])
+@login_required
+def api_free_config_set():
+    """Set the signup email the agent uses to auto-create accounts on
+    newly scouted free sites (stored locally, never committed)."""
+    from src.backend import free_provision
+    data = request.get_json() or {}
+    try:
+        cfg = free_provision.set_signup_email(data.get("signup_email", ""))
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+    return jsonify({"status": "success",
+                    "signup_email": cfg.get("signup_email")})
+
+
 @app.route('/api/repurpose/export', methods=['POST'])
 @login_required
 def api_repurpose_export():

@@ -328,6 +328,12 @@ class WorkflowEngine:
                     prefer = (str(image_model).split(":", 1)[1].strip()
                               if ":" in str(image_model) else None)
                     print(f"[Orchestrator] image-gen via free-web agent (prefer={prefer or 'auto'})")
+                    # Every image gets a ChatGPT-written prompt grounded in
+                    # the main script (fills gaps; gen-script scenes usually
+                    # already carry one).
+                    from src.backend.free_prompting import ensure_image_prompts
+                    main_script = self._find_in_state('script') or ''
+                    scenes = ensure_image_prompts(scenes, main_script, visual_style)
                     for i, scene in enumerate(scenes):
                         prompt = (scene.get('image_prompt')
                                   or (scene.get('image_prompts') or [None])[0]
@@ -371,6 +377,14 @@ class WorkflowEngine:
                     prefer = (str(provider).split(":", 1)[1].strip()
                               if ":" in str(provider) else None)
                     print(f"[Orchestrator] img-to-video via free-web agent (prefer={prefer or 'auto'})")
+                    # Every scene gets a dedicated ChatGPT-written motion
+                    # script (camera + in-frame dynamics) based on the main
+                    # script and the scene's image prompt — not a generic
+                    # push-in. Falls back to the next provider automatically
+                    # if the first option fails (A -> B -> C chain).
+                    from src.backend.free_prompting import ensure_video_prompts
+                    main_script = self._find_in_state('script') or ''
+                    scenes = ensure_video_prompts(scenes, main_script)
                     for i, scene in enumerate(scenes):
                         img = (scene.get('image_paths') or [None])[0] or scene.get('image_path')
                         prompt = (scene.get('image_to_video_prompt')

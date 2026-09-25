@@ -41,3 +41,7 @@ ENV/
 # Sub-repositories and temporary prompts
 signal/
 signal_prompt.txt
+
+# Free-agent local-only secrets (auto-created accounts, signup config)
+data/agent_config.json
+data/agent_accounts.json

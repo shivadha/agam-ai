@@ -62,6 +62,12 @@ def enqueue(kind: str, prompt: str = "", input_path: str | None = None,
     return job_id, provider
 
 
+def _enqueue_with(provider: dict, kind: str, prompt: str = "",
+                  input_path: str | None = None) -> str:
+    """Enqueue a job against one specific provider dict (no re-picking)."""
+    return jobqueue.enqueue_job(provider["id"], kind, prompt, input_path)
+
+
 def wait_for(job_id: str, timeout: int = 1500, poll: int = 5) -> dict:
     """Block until the job finishes. Returns the job dict."""
     deadline = time.time() + timeout
@@ -83,14 +89,89 @@ def generate_via_agent(kind: str, prompt: str = "", input_path: str | None = Non
     """
     Full round-trip: enqueue -> wait -> return
     {"result_path": ...} and/or {"result_text": ...}.
+
+    Acts like an AI with a plan B: tries providers in priority order
+    (option A, then B, then C...). If one fails — logged out, quota hit,
+    site changed — the job automatically moves to the next option instead
+    of dying. A pinned provider_id keeps the old fail-loud behaviour.
+
+    When every known option fails, the agent scouts the web for new free
+    alternatives, tries to provision one automatically, and retries once.
     """
-    job_id, provider = enqueue(kind, prompt, input_path, provider_id)
-    job = wait_for(job_id, timeout=timeout)
+    if not agent_alive():
+        raise FreeAgentError(
+            "Background agent is not running. Start it on your PC with "
+            "start_agent.bat (it runs invisibly in the background), then retry.")
+
+    tried: list[str] = []
+    errors: list[str] = []
+
+    def chain() -> list[dict]:
+        if provider_id:
+            p = ledger.get_provider(provider_id)
+            return [p] if p else []
+        return ledger.ranked_providers(kind)
+
+    candidates = chain()
+    if provider_id and not candidates:
+        raise FreeAgentError(
+            f"Pinned provider {provider_id!r} is not usable "
+            f"(disabled/exhausted/unknown). Fix it in the Free AI tab.")
+
+    job_id = ""
+    provider = None
+    prev_failed = None
+    for cand in candidates:
+        tried.append(cand["id"])
+        try:
+            if prev_failed:
+                print(f"[free-agent] option {prev_failed!r} failed — "
+                      f"falling back to next option: {cand['id']!r}")
+            job_id = _enqueue_with(cand, kind, prompt, input_path)
+            job = wait_for(job_id, timeout=timeout)
+            provider = cand
+            break
+        except FreeAgentError as e:
+            errors.append(f"{cand['id']}: {e}")
+            print(f"[free-agent] option {cand['id']!r} failed: {e}")
+            prev_failed = cand["id"]
+            continue
+    else:
+        # Every known option failed — scout the web for a new free
+        # alternative, auto-provision it, and retry once.
+        print(f"[free-agent] all {len(candidates)} known option(s) failed; "
+              f"scouting the web for new free alternatives...")
+        try:
+            from src.backend import free_provision
+            new_providers = free_provision.ensure_capacity(
+                kind, exclude_ids=set(tried))
+        except Exception as e:
+            new_providers = []
+            errors.append(f"provision: {e}")
+            print(f"[free-agent] auto-provisioning failed: {e}")
+        for cand in new_providers:
+            tried.append(cand["id"])
+            try:
+                job_id = _enqueue_with(cand, kind, prompt, input_path)
+                job = wait_for(job_id, timeout=timeout)
+                provider = cand
+                break
+            except FreeAgentError as e:
+                errors.append(f"{cand['id']}: {e}")
+                continue
+        else:
+            raise FreeAgentError(
+                f"All free-web options failed for kind={kind!r} "
+                f"(tried: {', '.join(tried) or 'none'}). "
+                f"Details: {' | '.join(errors[:3])}. "
+                f"Check the Free AI tab — new candidates may need approval.")
+
     return {
         "job_id": job_id,
         "provider_id": provider["id"],
         "result_path": job.get("result_path"),
         "result_text": job.get("result_text"),
+        "tried_providers": tried,
     }
 
 
