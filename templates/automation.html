@@ -255,6 +255,9 @@
                     <button class="btn-tb" id="btnOpenApiKeysModal" title="Configure Cloud & Local AI Keys (MiniMax, ElevenLabs, ComfyUI, Fal.ai)">
                         🔑 API Keys
                     </button>
+                    <button class="btn-tb" id="btnOpenGrowth" title="Growth toolkit — competitor scan, channel stats, SEO pack, music, shorts cutter, upload scheduler">
+                        🌱 Growth
+                    </button>
                     <button class="btn-tb btn-yt-connect" id="btnConnectYoutube" onclick="window.location.href='/youtube/authorize'" title="Connect YouTube account">
                         <span class="yt-icon">▶</span> YouTube
                     </button>
@@ -575,6 +578,23 @@
         </div>
     </div>
 
+    <!-- ── Growth Toolkit Modal ── -->
+    <div class="modal-overlay hidden" id="growthModal">
+        <div class="modal-box" style="max-width: 760px; max-height: 88vh; background: #0b0f19; border: 1px solid rgba(16,185,129,0.35); border-radius: 16px; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.8), 0 0 30px rgba(16,185,129,0.15);">
+            <div class="modal-header" style="padding: 1.25rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h2 style="font-size: 1.2rem; font-weight: 700; color: #fff;">🌱 Growth Toolkit</h2>
+                    <p style="font-size: 0.8rem; color: #94a3b8; margin-top: 2px;">Competitor intel · channel stats · SEO pack · music · shorts · scheduling</p>
+                </div>
+                <button class="modal-close" id="growthModalClose">✕</button>
+            </div>
+            <div id="growthTabs" style="display:flex; gap:6px; padding:0.75rem 1.5rem 0; flex-wrap:wrap;"></div>
+            <div id="growthModalBody" style="padding: 1.25rem 1.5rem; overflow-y: auto; flex: 1; font-size:0.85rem; color:#c9d1e0;">
+                <div style="text-align:center;color:#94a3b8;">Loading…</div>
+            </div>
+        </div>
+    </div>
+
     <!-- ── AI Video Editing Recipe Modal ── -->
     <div class="modal-overlay hidden" id="editingRecipeModal">
         <div class="modal-box" style="max-width: 750px; max-height: 85vh; background: #0d1121; border: 1px solid rgba(181, 123, 238, 0.3); border-radius: 16px; display: flex; flex-direction: column;">
@@ -744,6 +764,42 @@
                         </div>
                         <input type="password" id="keyInputHf" placeholder="hf_..." style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.82rem; font-family: monospace;">
                         <div style="font-size: 0.72rem; color: #64748b; margin-top: 5px;">Free. Powers FLUX.1 images, SVD video & zero-key LLM fallback.</div>
+                    </div>
+
+                    <!-- OpenRouter API Key -->
+                    <div style="background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 12px 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <label style="font-size: 0.82rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                <span>🔀</span> OpenRouter API Key
+                            </label>
+                            <span id="badgeOpenrouterKey" style="font-size: 0.68rem; padding: 2px 7px; border-radius: 12px; font-weight: 700; background: rgba(148,163,184,0.15); color: #94a3b8;">Checking...</span>
+                        </div>
+                        <input type="password" id="keyInputOpenrouter" placeholder="sk-or-..." style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.82rem; font-family: monospace;">
+                        <div style="font-size: 0.72rem; color: #64748b; margin-top: 5px;">Free key, no card needed. Unlocks 300+ models incl. free tiers for script generation.</div>
+                    </div>
+
+                    <!-- Pixabay API Key -->
+                    <div style="background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 12px 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <label style="font-size: 0.82rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                <span>🎶</span> Pixabay API Key
+                            </label>
+                            <span id="badgePixabayKey" style="font-size: 0.68rem; padding: 2px 7px; border-radius: 12px; font-weight: 700; background: rgba(148,163,184,0.15); color: #94a3b8;">Checking...</span>
+                        </div>
+                        <input type="password" id="keyInputPixabay" placeholder="Pixabay API key" style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.82rem; font-family: monospace;">
+                        <div style="font-size: 0.72rem; color: #64748b; margin-top: 5px;">Free. Royalty-free background music downloads for the Add Music node.</div>
+                    </div>
+
+                    <!-- Pexels API Key -->
+                    <div style="background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 12px 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <label style="font-size: 0.82rem; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
+                                <span>🎞</span> Pexels API Key
+                            </label>
+                            <span id="badgePexelsKey" style="font-size: 0.68rem; padding: 2px 7px; border-radius: 12px; font-weight: 700; background: rgba(148,163,184,0.15); color: #94a3b8;">Checking...</span>
+                        </div>
+                        <input type="password" id="keyInputPexels" placeholder="Pexels API key" style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 8px 10px; color: #fff; font-size: 0.82rem; font-family: monospace;">
+                        <div style="font-size: 0.72rem; color: #64748b; margin-top: 5px;">Free. Stock footage for the Fetch B-Roll node.</div>
                     </div>
 
                     <!-- ComfyUI Local Server URL -->

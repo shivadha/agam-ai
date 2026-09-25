@@ -549,6 +549,309 @@ def dequeue_workflow(qid):
     return jsonify({"status": "removed", "qid": qid})
 
 
+# ── Growth & Production Suite API ──────────────────────────────────────────
+# Standalone endpoints for the 10 growth/production modules so they can be
+# used from the Growth panel even outside a workflow run.
+
+@app.route('/api/growth/competitor-scan', methods=['POST'])
+@login_required
+def api_competitor_scan():
+    """Analyze a rival channel: formats, cadence, topic gaps. Needs YOUTUBE_API_KEY."""
+    data = request.get_json() or {}
+    channel = (data.get('channel') or '').strip()
+    if not channel:
+        return jsonify({"status": "error", "message": "Provide 'channel' (URL, @handle or ID)."}), 400
+    topics = [t.strip() for t in str(data.get('user_topics') or '').split(',') if t.strip()]
+    try:
+        from src.backend.competitor import analyze_channel
+        out = analyze_channel(channel, user_topics=topics,
+                              max_videos=int(data.get('max_videos') or 30),
+                              user_id=current_user.get_id() if hasattr(current_user, 'get_id') else 1)
+        return jsonify({"status": "success", **out})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/growth/analytics', methods=['GET'])
+@login_required
+def api_growth_analytics():
+    """Channel performance over the last N days (quota-light)."""
+    days = int(request.args.get('days') or 28)
+    try:
+        from src.backend.yt_analytics import channel_performance
+        uid = current_user.get_id() if hasattr(current_user, 'get_id') else 1
+        return jsonify({"status": "success", "performance": channel_performance(user_id=uid, days=days)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/growth/topic-affinity', methods=['POST'])
+@login_required
+def api_topic_affinity():
+    """Which of the given topics the audience actually rewards."""
+    data = request.get_json() or {}
+    topics = data.get('topics') or []
+    if isinstance(topics, str):
+        topics = [t.strip() for t in topics.split(',') if t.strip()]
+    if not topics:
+        return jsonify({"status": "error", "message": "Provide 'topics' (list or comma string)."}), 400
+    try:
+        from src.backend.yt_analytics import topic_affinity
+        uid = current_user.get_id() if hasattr(current_user, 'get_id') else 1
+        return jsonify({"status": "success", "topics": topic_affinity(user_id=uid, topics=topics,
+                       days=int(data.get('days') or 90)).get("topics", [])})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/seo/build', methods=['POST'])
+@login_required
+def api_seo_build():
+    """Full SEO pack: titles, description, chapters, tags (<=500 chars), Hindi."""
+    data = request.get_json() or {}
+    try:
+        from src.backend.seo import build_seo_pack
+        pack = build_seo_pack(data.get('title') or 'Untitled Video',
+                              data.get('scenes') or [],
+                              keywords=data.get('keywords') or [])
+        return jsonify({"status": "success", **pack})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/music/tracks', methods=['GET'])
+@login_required
+def api_music_tracks():
+    """Local music library listing (assets/music/)."""
+    try:
+        from src.backend.music import list_tracks
+        return jsonify({"status": "success", "tracks": list_tracks()})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/music/search', methods=['GET'])
+@login_required
+def api_music_search():
+    """Search Pixabay's free music library. Needs PIXABAY_API_KEY."""
+    query = (request.args.get('q') or '').strip()
+    if not query:
+        return jsonify({"status": "error", "message": "Provide ?q=<search terms>."}), 400
+    try:
+        from src.backend.music import pixabay_search, pixabay_download
+        hits = pixabay_search(query, per_page=int(request.args.get('per_page') or 10))
+        if request.args.get('download'):
+            saved = []
+            for h in hits[: int(request.args.get('download') or 1)]:
+                try:
+                    saved.append(pixabay_download(h.get('audio_url') or h.get('url'),
+                                                  f"pixabay_{h.get('id')}.mp3"))
+                except Exception as de:
+                    saved.append({"error": str(de)})
+            return jsonify({"status": "success", "hits": hits, "downloaded": saved})
+        return jsonify({"status": "success", "hits": hits})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/workflow/score-script', methods=['POST'])
+@login_required
+def api_score_script():
+    """Deterministic retention score (0-100) for a scene list — no LLM needed."""
+    data = request.get_json() or {}
+    scenes = data.get('scenes') or []
+    if not scenes:
+        return jsonify({"status": "error", "message": "Provide 'scenes'."}), 400
+    try:
+        from src.backend.retention import score_script
+        return jsonify({"status": "success", **score_script(scenes, format=data.get('format') or 'shorts')})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/broll/match', methods=['POST'])
+@login_required
+def api_broll_match():
+    """Match scenes to stock footage (Pexels). Needs PEXELS_API_KEY. Caches mp4s."""
+    data = request.get_json() or {}
+    scenes = data.get('scenes') or []
+    if not scenes:
+        return jsonify({"status": "error", "message": "Provide 'scenes'."}), 400
+    try:
+        from src.backend.broll import match_scenes_to_broll
+        return jsonify({"status": "success",
+                        "broll": match_scenes_to_broll(scenes, per_query=int(data.get('per_query') or 3))})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/voice/presets', methods=['GET'])
+@login_required
+def api_voice_presets():
+    """List saved signature voice presets (assets/voice_presets.json)."""
+    try:
+        from src.backend.signature_voice import list_presets
+        return jsonify({"status": "success", "presets": list_presets()})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/voice/presets', methods=['POST'])
+@login_required
+def api_voice_preset_save():
+    """Save a signature voice preset. Optional Chatterbox cloning from a sample."""
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({"status": "error", "message": "Provide 'name'."}), 400
+    try:
+        from src.backend.signature_voice import save_preset, clone_with_chatterbox
+        voice_id, provider = data.get('voice_id', ''), data.get('provider', 'auto')
+        sample = data.get('sample_path') or ''
+        if sample and data.get('clone'):
+            # Honest clone path — raises a clear error when Chatterbox is absent.
+            voice_id = clone_with_chatterbox(sample, name)
+            provider = 'chatterbox'
+        preset = save_preset(name, voice_id=voice_id, provider=provider,
+                             sample_path=sample, notes=data.get('notes', ''))
+        return jsonify({"status": "success", "preset": preset})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ── Shorts cutting (async jobs) ────────────────────────────────────────────
+_shorts_jobs = {}
+_shorts_lock = threading.Lock()
+
+
+@app.route('/api/shorts/cut', methods=['POST'])
+@login_required
+def api_shorts_cut():
+    """Cut viral 9:16 shorts from a finished video. Runs in a background thread."""
+    data = request.get_json() or {}
+    video_path = (data.get('video_path') or '').strip()
+    if not video_path or not os.path.exists(video_path):
+        return jsonify({"status": "error", "message": "Provide a valid 'video_path'."}), 400
+    job_id = "shorts-" + datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+    num, lo, hi = (int(data.get('num_shorts') or 3), float(data.get('min_sec') or 20),
+                   float(data.get('max_sec') or 58))
+    out_dir = os.path.join(OUTPUT_DIR, f"shorts_{job_id}")
+    with _shorts_lock:
+        _shorts_jobs[job_id] = {"status": "running", "result": None, "error": None}
+
+    def _run():
+        try:
+            from src.backend.shorts_cutter import cut_shorts
+            shorts = cut_shorts(video_path, out_dir, num_shorts=num, min_sec=lo, max_sec=hi)
+            with _shorts_lock:
+                _shorts_jobs[job_id] = {"status": "done", "result": shorts, "error": None}
+        except Exception as e:
+            with _shorts_lock:
+                _shorts_jobs[job_id] = {"status": "error", "result": None, "error": str(e)}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "queued", "job_id": job_id})
+
+
+@app.route('/api/shorts/status/<job_id>')
+@login_required
+def api_shorts_status(job_id):
+    with _shorts_lock:
+        job = _shorts_jobs.get(job_id)
+    if not job:
+        return jsonify({"status": "error", "message": "Unknown job id."}), 404
+    return jsonify({"status": "success", "job": job})
+
+
+@app.route('/api/repurpose/export', methods=['POST'])
+@login_required
+def api_repurpose_export():
+    """Export wide/vertical/square versions of a finished video (pure ffmpeg)."""
+    data = request.get_json() or {}
+    video_path = (data.get('video_path') or '').strip()
+    if not video_path or not os.path.exists(video_path):
+        return jsonify({"status": "error", "message": "Provide a valid 'video_path'."}), 400
+    try:
+        from src.backend.repurpose import export_all
+        return jsonify({"status": "success",
+                        **export_all(video_path, os.path.join(OUTPUT_DIR, "repurpose"))})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ── Scheduled uploads ──────────────────────────────────────────────────────
+@app.route('/api/upload/schedule', methods=['GET'])
+@login_required
+def api_upload_schedule_list():
+    from src.backend.publish_schedule import list_queue
+    return jsonify({"status": "success", "queue": list_queue()})
+
+
+@app.route('/api/upload/schedule', methods=['POST'])
+@login_required
+def api_upload_schedule_add():
+    data = request.get_json() or {}
+    video_path = (data.get('video_path') or '').strip()
+    if not video_path or not os.path.exists(video_path):
+        return jsonify({"status": "error", "message": "Provide a valid 'video_path'."}), 400
+    try:
+        from src.backend.publish_schedule import schedule_upload
+        uid = current_user.get_id() if hasattr(current_user, 'get_id') else 1
+        item = schedule_upload(
+            video_path,
+            title=data.get('title') or 'AI Generated Video',
+            description=data.get('description') or '',
+            tags=data.get('tags') or [],
+            publish_at_iso=data.get('publish_at') or None,
+            privacy=(data.get('privacy') or 'private').lower(),
+            user_id=int(uid),
+        )
+        return jsonify({"status": "success", "scheduled": item})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/upload/schedule/<item_id>', methods=['DELETE'])
+@login_required
+def api_upload_schedule_remove(item_id):
+    from src.backend.publish_schedule import remove
+    ok = remove(item_id)
+    return jsonify({"status": "success" if ok else "error", "removed": ok})
+
+
+@app.route('/api/upload/mark-published', methods=['POST'])
+@login_required
+def api_upload_mark_published():
+    data = request.get_json() or {}
+    if not data.get('item_id') or not data.get('video_id'):
+        return jsonify({"status": "error", "message": "Provide 'item_id' and 'video_id'."}), 400
+    from src.backend.publish_schedule import mark_published
+    return jsonify({"status": "success", "updated": mark_published(data['item_id'], data['video_id'])})
+
+
+def _publish_due_uploads():
+    """Scheduler job: upload every due scheduled item to YouTube, mark results."""
+    try:
+        from src.backend.publish_schedule import due_uploads, mark_published, mark_failed
+        due = due_uploads()
+        if not due:
+            return
+        from src.backend.youtube_upload import upload_video
+        for item in due:
+            try:
+                uid = int(item.get('user_id') or 1)
+                vid = upload_video(uid, item['video_path'], item.get('title', ''),
+                                   item.get('description', ''), tags=item.get('tags') or [])
+                video_id = vid.get('video_id') if isinstance(vid, dict) else vid
+                mark_published(item['id'], str(video_id or ''))
+                print(f"[scheduler] Published '{item.get('title')}' -> {video_id}", flush=True)
+            except Exception as e:
+                mark_failed(item['id'], str(e))
+                print(f"[scheduler] Upload failed for '{item.get('title')}': {e}", flush=True)
+    except Exception as e:
+        print(f"[scheduler] _publish_due_uploads error: {e}", flush=True)
+
+
 # ── Single-Node Preview ────────────────────────────────────────────────────
 # Run ONE node standalone (no full pipeline) for fast quality iteration:
 # preview a script, an image, a voiceover, a thumbnail...
@@ -1598,6 +1901,9 @@ def api_keys_manager():
                 "MUSE_API_KEY": mask("MUSE_API_KEY") or mask("META_API_KEY"),
                 "HF_TOKEN": mask("HF_TOKEN") or mask("HUGGINGFACE_TOKEN"),
                 "ASTRA_API_KEY": mask("ASTRA_API_KEY") or mask("EXPERIENTIAL_API_KEY"),
+                "OPENROUTER_API_KEY": mask("OPENROUTER_API_KEY"),
+                "PIXABAY_API_KEY": mask("PIXABAY_API_KEY"),
+                "PEXELS_API_KEY": mask("PEXELS_API_KEY"),
                 "COMFYUI_URL": os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188"),
             },
             "is_set": {
@@ -1610,6 +1916,9 @@ def api_keys_manager():
                 "muse": bool(os.environ.get("MUSE_API_KEY") or os.environ.get("META_API_KEY")),
                 "huggingface": bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")),
                 "astra": bool(os.environ.get("ASTRA_API_KEY") or os.environ.get("EXPERIENTIAL_API_KEY")),
+                "openrouter": bool(os.environ.get("OPENROUTER_API_KEY")),
+                "pixabay": bool(os.environ.get("PIXABAY_API_KEY")),
+                "pexels": bool(os.environ.get("PEXELS_API_KEY")),
             }
         })
 
@@ -1646,7 +1955,8 @@ def api_keys_manager():
     }
     for k in ["MINIMAX_API_KEY", "FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY",
               "GROQ_API_KEY", "GEMINI_API_KEY", "MUSE_API_KEY", "HF_TOKEN",
-              "ASTRA_API_KEY", "COMFYUI_URL",
+              "ASTRA_API_KEY", "OPENROUTER_API_KEY", "PIXABAY_API_KEY", "PEXELS_API_KEY",
+              "COMFYUI_URL",
               "HUGGINGFACE_TOKEN", "META_API_KEY", "EXPERIENTIAL_API_KEY"]:
         if k in data:
             update_key(KEY_ALIASES.get(k, k), data[k])
@@ -1759,6 +2069,8 @@ if __name__ == '__main__':
         scheduler = BackgroundScheduler(daemon=True)
         scheduler.add_job(_run_pipeline, 'interval', minutes=5, id='pipeline_job',
                           next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=10))
+        scheduler.add_job(_publish_due_uploads, 'interval', minutes=5, id='publish_due_job',
+                          next_run_time=datetime.datetime.now() + datetime.timedelta(minutes=1))
         scheduler.start()
         print("[Startup] Periodic news aggregation scheduler started.", flush=True)
     except Exception as _e:

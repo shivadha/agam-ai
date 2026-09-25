@@ -123,7 +123,8 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
     Walk the provider chain and return the first successful completion text,
     or None when nothing produced output. Order mirrors production priority:
     Astra -> explicit Ollama -> Muse Spark -> Groq -> Gemini -> OpenAI ->
-    Pollinations (free) -> Hugging Face Inference (free).
+    OpenRouter (free :free models) -> Pollinations (free) ->
+    Hugging Face Inference (free).
     """
     content_str = None
     active_key = custom_api_key or os.environ.get("ASTRA_API_KEY", "") or os.environ.get("EXPERIENTIAL_API_KEY", "")
@@ -265,6 +266,43 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
                     print(f"[script_gen] [{tag}] OpenAI ({o_model}) HTTP {resp.status_code}: {resp.text[:120]}")
             except Exception as ex:
                 print(f"[script_gen] [{tag}] OpenAI failed: {ex}.")
+
+    # 5.5. OpenRouter — one free key unlocks 300+ models, many with :free tiers.
+    # Free tier needs no card: 20 req/min, 50 req/day. Tries several free
+    # models in order since the free lineup rotates without warning.
+    or_key = ""
+    if "openrouter" in model_name.lower():
+        or_key = clean_key or os.environ.get("OPENROUTER_API_KEY", "").strip()
+    else:
+        or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not content_str and or_key:
+        or_models = [m.strip() for m in os.environ.get("OPENROUTER_MODELS", "").split(",") if m.strip()] or [
+            "deepseek/deepseek-chat:free",
+            "qwen/qwen3-235b-a22b:free",
+            "google/gemma-3-27b-it:free",
+            "openai/gpt-oss-120b:free",
+        ]
+        print(f"[script_gen] [{tag}] Routing to OpenRouter (free models)...")
+        for or_model in or_models:
+            try:
+                or_resp = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {or_key}", "Content-Type": "application/json",
+                             "HTTP-Referer": "http://localhost:3000", "X-Title": "AGAM AI Studio"},
+                    json={"model": or_model,
+                          "messages": [{"role": "system", "content": system_prompt},
+                                       {"role": "user", "content": user_prompt}],
+                          "temperature": 0.7},
+                    timeout=45,
+                )
+                if or_resp.status_code == 200:
+                    content_str = or_resp.json()["choices"][0]["message"]["content"]
+                    print(f"[script_gen] [{tag}] [OK] OpenRouter ({or_model}) responded.")
+                    break
+                else:
+                    print(f"[script_gen] [{tag}] OpenRouter ({or_model}) HTTP {or_resp.status_code}: {or_resp.text[:120]}")
+            except Exception as or_err:
+                print(f"[script_gen] [{tag}] OpenRouter attempt failed ({or_model}): {or_err}")
 
     # 6. Free Online Pollinations Text AI Engine
     if not content_str:

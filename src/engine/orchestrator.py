@@ -236,6 +236,19 @@ class WorkflowEngine:
                         
                 voice = node_data.get('voice', 'en-US-ChristopherNeural')
                 provider = node_data.get('provider', 'auto')
+                # ── Signature voice preset (optional) ──
+                # A saved channel voice overrides the per-node voice/provider
+                # so every video uses the same recognizable voice.
+                voice_preset = (node_data.get('voice_preset') or '').strip()
+                if voice_preset:
+                    try:
+                        from src.backend.signature_voice import get_preset
+                        _vp = get_preset(voice_preset)
+                        voice = _vp.get('voice_id') or voice
+                        provider = _vp.get('provider') or provider
+                        print(f"[tts] Signature voice preset '{voice_preset}' -> {provider}:{voice}", flush=True)
+                    except Exception as _vp_err:
+                        print(f"[tts] Voice preset note: {_vp_err}", flush=True)
                 api_key = node_data.get('api_key', '')
                 output_path = node_data.get('output_path', os.path.join(OUTPUT_DIR, f"audio_{node_id}.mp3"))
                 
@@ -562,6 +575,144 @@ class WorkflowEngine:
                     'sfx_timeline': sfx_timeline,
                     'audio_agent_results': audio_res
                 }
+
+            elif node_type == 'competitor-scan':
+                from src.backend.competitor import analyze_channel
+                user_id = node_data.get('user_id', 1)
+                channel = (node_data.get('channel') or '').strip()
+                if not channel:
+                    raise ValueError("competitor-scan needs a 'channel' (URL, @handle or channel ID)")
+                topics_raw = node_data.get('user_topics') or self._find_in_state('topic_title') or ''
+                user_topics = [t.strip() for t in str(topics_raw).split(',') if t.strip()]
+                data = analyze_channel(channel, user_topics=user_topics,
+                                       max_videos=int(node_data.get('max_videos') or 30),
+                                       user_id=user_id)
+                result = {"status": "success", "node_type": node_type,
+                          "competitor": data, "gaps": data.get("gaps", []),
+                          "suggested_titles": [g.get("suggested_title") for g in data.get("gaps", [])]}
+
+            elif node_type == 'analytics-pull':
+                from src.backend.yt_analytics import channel_performance, topic_affinity
+                user_id = node_data.get('user_id', 1)
+                days = int(node_data.get('days') or 28)
+                perf = channel_performance(user_id=user_id, days=days)
+                topics_raw = node_data.get('topics') or self._find_in_state('topic_title') or ''
+                topics = [t.strip() for t in str(topics_raw).split(',') if t.strip()]
+                affinity = topic_affinity(user_id=user_id, topics=topics, days=days).get("topics", []) if topics else []
+                result = {"status": "success", "node_type": node_type,
+                          "performance": perf, "topic_affinity": affinity}
+
+            elif node_type == 'seo-pack':
+                from src.backend.seo import build_seo_pack
+                title = (node_data.get('title') or self._find_in_state('title')
+                         or self._find_in_state('topic_title') or 'Untitled Video')
+                scenes = node_data.get('scenes') or self._find_in_state('scenes') or []
+                kw_raw = node_data.get('keywords') or ''
+                keywords = [k.strip() for k in str(kw_raw).split(',') if k.strip()]
+                pack = build_seo_pack(title, scenes, keywords=keywords)
+                result = {"status": "success", "node_type": node_type, "seo_ready": True, **pack}
+
+            elif node_type == 'score-script':
+                from src.backend.retention import score_script
+                scenes = node_data.get('scenes') or self._find_in_state('scenes') or []
+                fmt = node_data.get('format') or 'shorts'
+                if not scenes:
+                    raise ValueError("score-script: no scenes found (connect it after gen-script).")
+                scored = score_script(scenes, format=fmt)
+                print(f"[score-script] {scored.get('verdict')} — {scored.get('score')}/100", flush=True)
+                result = {"status": "success", "node_type": node_type, **scored}
+
+            elif node_type == 'add-music':
+                from src.backend.music import list_tracks, fit_music, duck_under
+                voice_path = node_data.get('audio_path') or self._find_in_state('audio_path')
+                if not voice_path or not os.path.exists(str(voice_path)):
+                    raise ValueError("add-music: no voiceover audio found (connect it after tts).")
+                target_sec = 45.0
+                try:
+                    from moviepy import AudioFileClip
+                    with AudioFileClip(str(voice_path)) as clip:
+                        target_sec = float(clip.duration or 45.0)
+                except Exception:
+                    pass
+                tracks = list_tracks()
+                query = (node_data.get('query') or '').strip()
+                if not tracks and query:
+                    from src.backend.music import pixabay_search, pixabay_download
+                    hits = pixabay_search(query, per_page=3)
+                    for h in hits:
+                        try:
+                            pixabay_download(h.get('audio_url') or h.get('url'), f"pixabay_{h.get('id')}.mp3")
+                        except Exception as dl_err:
+                            print(f"[add-music] Pixabay download note: {dl_err}")
+                    tracks = list_tracks()
+                if not tracks:
+                    raise ValueError("add-music: no music in assets/music/ and no Pixabay query given.")
+                wanted = (node_data.get('track') or '').strip().lower()
+                track = next((t for t in tracks if wanted and wanted in t.get('name', '').lower()), tracks[0])
+                bed_path = fit_music(track['path'], target_sec, os.path.join(OUTPUT_DIR, f"music_bed_{node_id}.m4a"))
+                mixed_path = duck_under(bed_path, str(voice_path),
+                                        os.path.join(OUTPUT_DIR, f"music_mix_{node_id}.m4a"),
+                                        music_db=float(node_data.get('music_db', -20)))
+                # music_path flows straight into assemble-video's state lookup
+                result = {"status": "success", "node_type": node_type,
+                          "music_path": mixed_path, "music_bed_path": bed_path,
+                          "track_name": track.get('name')}
+
+            elif node_type == 'fetch-broll':
+                from src.backend.broll import match_scenes_to_broll
+                scenes = node_data.get('scenes') or self._find_in_state('scenes') or []
+                if not scenes:
+                    raise ValueError("fetch-broll: no scenes found (connect it after gen-script).")
+                matched = match_scenes_to_broll(scenes, per_query=int(node_data.get('per_query') or 3))
+                # Inject clips as video_paths — the assembler prefers real
+                # footage over AI stills when video_paths is present.
+                for idx, scene in enumerate(scenes):
+                    info = matched.get(idx, matched.get(str(idx), {})) if isinstance(matched, dict) else {}
+                    local = (info or {}).get('local_path')
+                    if local and os.path.exists(local):
+                        scene['video_paths'] = [local]
+                result = {"status": "success", "node_type": node_type,
+                          "broll_map": matched, "scenes": scenes}
+
+            elif node_type == 'cut-shorts':
+                from src.backend.shorts_cutter import cut_shorts
+                video_path = node_data.get('video_path') or self._find_in_state('video_path')
+                if not video_path or not os.path.exists(str(video_path)):
+                    raise ValueError("cut-shorts needs a video_path — connect it after assemble-video.")
+                shorts = cut_shorts(
+                    str(video_path),
+                    os.path.join(OUTPUT_DIR, f"shorts_{node_id}"),
+                    num_shorts=int(node_data.get('num_shorts', 3) or 3),
+                    min_sec=float(node_data.get('min_sec', 20) or 20),
+                    max_sec=float(node_data.get('max_sec', 58) or 58),
+                )
+                result = {"status": "success", "node_type": node_type,
+                          "shorts": shorts,
+                          "short_paths": [s["path"] for s in shorts]}
+
+            elif node_type == 'repurpose':
+                from src.backend.repurpose import export_all
+                video_path = node_data.get('video_path') or self._find_in_state('video_path')
+                if not video_path or not os.path.exists(str(video_path)):
+                    raise ValueError("repurpose needs a video_path — connect it after assemble-video.")
+                exports = export_all(str(video_path), os.path.join(OUTPUT_DIR, "repurpose"))
+                result = {"status": "success", "node_type": node_type, **exports}
+
+            elif node_type == 'schedule-upload':
+                from src.backend.publish_schedule import schedule_upload
+                video_path = node_data.get('video_path') or self._find_in_state('video_path')
+                if not video_path or not os.path.exists(str(video_path)):
+                    raise ValueError("schedule-upload needs a video_path — connect it after assemble-video.")
+                item = schedule_upload(
+                    str(video_path),
+                    title=node_data.get('title') or self._find_in_state('title') or 'AI Generated Video',
+                    description=node_data.get('description') or self._find_in_state('description') or '',
+                    tags=node_data.get('tags') or self._find_in_state('tags') or [],
+                    publish_at_iso=node_data.get('publish_at') or None,
+                    privacy=(node_data.get('privacy') or 'private').lower(),
+                    user_id=int(node_data.get('user_id', 1) or 1),
+                )
+                result = {"status": "success", "node_type": node_type, "scheduled": item}
 
             else:
                 # ── Translate: real implementation (was a silent passthrough).

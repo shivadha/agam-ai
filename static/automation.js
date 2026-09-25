@@ -73,6 +73,16 @@ const NDEFS = {
     'store-analytics':  { label:'Store Analytics',       icon:'📈',  cat:'storage',  color:'#ec4899', execMs:800  },
     'gsheet-update':    { label:'Google Sheet Update',   icon:'📊',  cat:'platform', color:'#f59e0b', execMs:1000 },
     'send-notif':       { label:'Send Notification',     icon:'🔔',  cat:'platform', color:'#f59e0b', execMs:500  },
+    // ── Growth (Rival scan, stats, SEO, music, B-roll, shorts, publish)
+    'competitor-scan':  { label:'Competitor Scan',       icon:'🔎',  cat:'ai',       color:'#0ea5e9', execMs:2500 },
+    'analytics-pull':   { label:'Channel Analytics',     icon:'📊',  cat:'ai',       color:'#0ea5e9', execMs:2000 },
+    'seo-pack':         { label:'SEO Pack',              icon:'🏷',  cat:'ai',       color:'#0ea5e9', execMs:1500 },
+    'score-script':     { label:'Retention Score',       icon:'💯',  cat:'ai',       color:'#0ea5e9', execMs:1200 },
+    'add-music':        { label:'Add Music (Ducked)',    icon:'🎧',  cat:'media',    color:'#0d9488', execMs:3000 },
+    'fetch-broll':      { label:'Fetch B-Roll',          icon:'🎞',  cat:'media',    color:'#0d9488', execMs:4000 },
+    'cut-shorts':       { label:'Cut Viral Shorts',      icon:'✂️',  cat:'media',    color:'#0d9488', execMs:6000 },
+    'repurpose':        { label:'Repurpose (9:16/1:1)',  icon:'🔁',  cat:'media',    color:'#0d9488', execMs:4000 },
+    'schedule-upload':  { label:'Schedule Upload',       icon:'🗓',  cat:'platform', color:'#0ea5e9', execMs:1500 },
     // ── Logic
     'if-cond':          { label:'If Condition',          icon:'❓',  cat:'logic',    color:'#6b7280', execMs:300  },
     'delay':            { label:'Delay',                  icon:'⏱',  cat:'logic',    color:'#6b7280', execMs:2100 },
@@ -120,7 +130,7 @@ const NODE_CONFIGS = {
         { key:'topic',    label:'Saved Article', type:'select', opts:['Loading...'], def:'Loading...' },
     ],
     'gen-script': [
-        { key:'model',    label:'AI Model',     type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
+        { key:'model',    label:'AI Model',     type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','OpenRouter (Free Models)','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
         { key:'api_key',  label:'API Key (Optional)', type:'text', placeholder:'Leave blank – uses GROQ_API_KEY from .env', def:'' },
         { key:'shorts_length', label:'Shorts Length', type:'select', opts:['30 seconds','45 seconds','60 seconds'], def:'45 seconds' },
         { key:'style',    label:'Video Style',  type:'select', opts:['Viral Short','Informative','Educational','Entertaining','Tutorial'], def:'Viral Short' },
@@ -135,6 +145,7 @@ const NODE_CONFIGS = {
     ],
     'tts': [
         { key:'voice',    label:'Voice',         type:'select', opts:['Kokoro-82M (af_heart) [Local Free]','Kokoro-82M (am_adam) [Local Free]','en-US-ChristopherNeural (Edge)','en-US-JennyNeural (Edge)','en-GB-RyanNeural (Edge)'], def:'Kokoro-82M (af_heart) [Local Free]' },
+        { key:'voice_preset', label:'Signature Voice Preset (overrides voice)', type:'text', placeholder:'e.g. my-channel-voice', def:'' },
         { key:'speed',    label:'Speed',         type:'range',  min:0.5, max:2.0, step:0.1, def:1.1 },
         { key:'language', label:'Language',      type:'select', opts:['English','Hindi','Spanish','French','Japanese'], def:'English' },
         { key:'hindi_dub', label:'Hindi Dub (2nd audio track — English stays primary)', type:'toggle', def:false },
@@ -179,6 +190,42 @@ const NODE_CONFIGS = {
     'send-notif': [
         { key:'channel',   label:'Channel',       type:'select', opts:['Email','Slack','Discord','Telegram'], def:'Email' },
         { key:'template',  label:'Message Template', type:'textarea', placeholder:'Video {{title}} was published!', def:'' },
+    ],
+    // ── Growth & Production Suite (local-first, free) ──
+    'competitor-scan': [
+        { key:'channel',    label:'Rival Channel (URL / @handle / ID)', type:'text', placeholder:'https://youtube.com/@SomeChannel', def:'' },
+        { key:'max_videos', label:'Videos to Analyze', type:'select', opts:['10','20','30','50'], def:'30' },
+        { key:'user_topics', label:'Your Topics (comma separated)', type:'text', placeholder:'AI news, space, history', def:'' },
+    ],
+    'analytics-pull': [
+        { key:'days',   label:'Lookback Window', type:'select', opts:['7','28','90'], def:'28' },
+        { key:'topics', label:'Topics to Compare (comma separated)', type:'text', placeholder:'AI, automation', def:'' },
+    ],
+    'seo-pack': [
+        { key:'title',    label:'Video Title (blank = use pipeline title)', type:'text', placeholder:'', def:'' },
+        { key:'keywords', label:'Extra Keywords (comma separated)', type:'text', placeholder:'', def:'' },
+    ],
+    'score-script': [
+        { key:'format', label:'Format', type:'select', opts:['shorts','longform'], def:'shorts' },
+    ],
+    'add-music': [
+        { key:'track',    label:'Local Track (blank = first in assets/music/)', type:'text', placeholder:'', def:'' },
+        { key:'query',    label:'Pixabay Search (used only if no local track)', type:'text', placeholder:'cinematic upbeat', def:'' },
+        { key:'music_db', label:'Music Level (dB under voice)', type:'select', opts:['-24','-20','-16','-12'], def:'-20' },
+    ],
+    'fetch-broll': [
+        { key:'per_query', label:'Clips per Scene', type:'select', opts:['1','2','3'], def:'3' },
+    ],
+    'cut-shorts': [
+        { key:'num_shorts', label:'Number of Shorts', type:'select', opts:['1','2','3','4','5'], def:'3' },
+        { key:'min_sec',    label:'Min Length (sec)', type:'text', placeholder:'20', def:'20' },
+        { key:'max_sec',    label:'Max Length (sec)', type:'text', placeholder:'58', def:'58' },
+    ],
+    'repurpose': [],
+    'schedule-upload': [
+        { key:'title',      label:'Title Override (blank = pipeline title)', type:'text', placeholder:'', def:'' },
+        { key:'publish_at', label:'Publish At (ISO, blank = due now)', type:'text', placeholder:'2026-10-01T18:00:00+05:30', def:'' },
+        { key:'privacy',    label:'Privacy', type:'select', opts:['private','unlisted','public'], def:'private' },
     ],
 };
 
@@ -379,6 +426,9 @@ function cacheDOM() {
         keyInputOpenai:      g('keyInputOpenai'),
         keyInputGroq:        g('keyInputGroq'),
         keyInputMuse:        g('keyInputMuse'),
+        keyInputOpenrouter:  g('keyInputOpenrouter'),
+        keyInputPixabay:     g('keyInputPixabay'),
+        keyInputPexels:      g('keyInputPexels'),
         keyInputGemini:      g('keyInputGemini'),
         keyInputHf:          g('keyInputHf'),
         keyInputComfyUrl:    g('keyInputComfyUrl'),
@@ -388,6 +438,9 @@ function cacheDOM() {
         badgeOpenaiKey:      g('badgeOpenaiKey'),
         badgeGroqKey:        g('badgeGroqKey'),
         badgeMuseKey:        g('badgeMuseKey'),
+        badgeOpenrouterKey:  g('badgeOpenrouterKey'),
+        badgePixabayKey:     g('badgePixabayKey'),
+        badgePexelsKey:      g('badgePexelsKey'),
         badgeGeminiKey:      g('badgeGeminiKey'),
         badgeHfKey:          g('badgeHfKey'),
         badgeComfyUrl:       g('badgeComfyUrl'),
@@ -3795,6 +3848,9 @@ async function loadApiKeys() {
             if (D.keyInputOpenai && !D.keyInputOpenai.value) D.keyInputOpenai.placeholder = k.OPENAI_API_KEY || 'sk-...';
             if (D.keyInputGroq && !D.keyInputGroq.value) D.keyInputGroq.placeholder = k.GROQ_API_KEY || 'gsk_...';
             if (D.keyInputMuse && !D.keyInputMuse.value) D.keyInputMuse.placeholder = k.MUSE_API_KEY || 'LLM_...';
+            if (D.keyInputOpenrouter && !D.keyInputOpenrouter.value) D.keyInputOpenrouter.placeholder = k.OPENROUTER_API_KEY || 'sk-or-...';
+            if (D.keyInputPixabay && !D.keyInputPixabay.value) D.keyInputPixabay.placeholder = k.PIXABAY_API_KEY || 'Pixabay API key';
+            if (D.keyInputPexels && !D.keyInputPexels.value) D.keyInputPexels.placeholder = k.PEXELS_API_KEY || 'Pexels API key';
             if (D.keyInputGemini && !D.keyInputGemini.value) D.keyInputGemini.placeholder = k.GEMINI_API_KEY || 'AIza...';
             if (D.keyInputHf && !D.keyInputHf.value) D.keyInputHf.placeholder = k.HF_TOKEN || 'hf_...';
             if (D.keyInputComfyUrl && !D.keyInputComfyUrl.value) D.keyInputComfyUrl.value = k.COMFYUI_URL || 'http://127.0.0.1:8188';
@@ -3805,6 +3861,9 @@ async function loadApiKeys() {
             _updateKeyBadge(D.badgeOpenaiKey, is_set.openai, 'Configured', 'Optional');
             _updateKeyBadge(D.badgeGroqKey, is_set.groq, 'Configured', 'Optional');
             _updateKeyBadge(D.badgeMuseKey, is_set.muse, 'Configured', 'Optional');
+            _updateKeyBadge(D.badgeOpenrouterKey, is_set.openrouter, 'Configured', 'Optional · free');
+            _updateKeyBadge(D.badgePixabayKey, is_set.pixabay, 'Configured', 'Optional · free');
+            _updateKeyBadge(D.badgePexelsKey, is_set.pexels, 'Configured', 'Optional · free');
             _updateKeyBadge(D.badgeGeminiKey, is_set.gemini, 'Configured', 'Optional · free tier');
             _updateKeyBadge(D.badgeHfKey, is_set.huggingface, 'Configured', 'Optional · free');
             if (D.badgeComfyUrl) {
@@ -3852,6 +3911,9 @@ async function saveApiKeys() {
     if (D.keyInputOpenai?.value?.trim()) payload.OPENAI_API_KEY = D.keyInputOpenai.value.trim();
     if (D.keyInputGroq?.value?.trim()) payload.GROQ_API_KEY = D.keyInputGroq.value.trim();
     if (D.keyInputMuse?.value?.trim()) payload.MUSE_API_KEY = D.keyInputMuse.value.trim();
+    if (D.keyInputOpenrouter?.value?.trim()) payload.OPENROUTER_API_KEY = D.keyInputOpenrouter.value.trim();
+    if (D.keyInputPixabay?.value?.trim()) payload.PIXABAY_API_KEY = D.keyInputPixabay.value.trim();
+    if (D.keyInputPexels?.value?.trim()) payload.PEXELS_API_KEY = D.keyInputPexels.value.trim();
     if (D.keyInputGemini?.value?.trim()) payload.GEMINI_API_KEY = D.keyInputGemini.value.trim();
     if (D.keyInputHf?.value?.trim()) payload.HF_TOKEN = D.keyInputHf.value.trim();
     if (D.keyInputComfyUrl?.value?.trim()) payload.COMFYUI_URL = D.keyInputComfyUrl.value.trim();
@@ -3877,6 +3939,9 @@ async function saveApiKeys() {
             if (D.keyInputOpenai) D.keyInputOpenai.value = '';
             if (D.keyInputGroq) D.keyInputGroq.value = '';
             if (D.keyInputMuse) D.keyInputMuse.value = '';
+            if (D.keyInputOpenrouter) D.keyInputOpenrouter.value = '';
+            if (D.keyInputPixabay) D.keyInputPixabay.value = '';
+            if (D.keyInputPexels) D.keyInputPexels.value = '';
             if (D.keyInputGemini) D.keyInputGemini.value = '';
             if (D.keyInputHf) D.keyInputHf.value = '';
             await loadApiKeys();
@@ -4225,3 +4290,281 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(checkComfyUIStatus, 2000);
     setInterval(checkComfyUIStatus, 30000);
 });
+
+// ──────────────────────────────────────────────────────────────
+// 🌱 GROWTH TOOLKIT — standalone panels for competitor scan, channel
+// stats, SEO pack, music search, shorts cutting, upload scheduling.
+// These call the same backends the workflow nodes use.
+// ──────────────────────────────────────────────────────────────
+const GROWTH_TABS = [
+    { id: 'competitor', label: '🔎 Competitor' },
+    { id: 'stats',      label: '📊 Stats' },
+    { id: 'seo',        label: '🏷 SEO' },
+    { id: 'music',      label: '🎶 Music' },
+    { id: 'shorts',     label: '✂️ Shorts' },
+    { id: 'schedule',   label: '🗓 Schedule' },
+];
+let _growthActiveTab = 'competitor';
+let _shortsPollTimer = null;
+
+function _gIn(id, placeholder, val='') {
+    return `<input id="${id}" placeholder="${escHtml(placeholder)}" value="${escHtml(val)}" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px 10px;color:#fff;font-size:0.82rem;">`;
+}
+function _gLbl(t) { return `<div style="font-size:0.75rem;color:#94a3b8;margin:10px 0 4px;font-weight:600;">${t}</div>`; }
+function _gBtn(id, label) {
+    return `<button id="${id}" class="btn-tb" style="margin-top:12px;background:linear-gradient(135deg,#059669,#10b981);border-color:rgba(16,185,129,0.5);font-weight:700;">${label}</button>`;
+}
+function _gRes(id) { return `<div id="${id}" style="margin-top:14px;"></div>`; }
+
+function growthTabHtml(tab) {
+    switch (tab) {
+        case 'competitor':
+            return _gLbl('Rival channel (URL, @handle or channel ID)') +
+                _gIn('gcChannel', 'https://youtube.com/@SomeChannel') +
+                _gLbl('Your topics (comma separated — finds gaps the rival ignores)') +
+                _gIn('gcTopics', 'AI news, space, history') +
+                _gLbl('Videos to analyze') +
+                `<select id="gcMax" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px;color:#fff;"><option>10</option><option>20</option><option selected>30</option><option>50</option></select>` +
+                _gBtn('gcRun', '🔎 Scan Competitor') + _gRes('gcOut');
+        case 'stats':
+            return _gLbl('Lookback window') +
+                `<select id="gsDays" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px;color:#fff;"><option value="7">7 days</option><option value="28" selected>28 days</option><option value="90">90 days</option></select>` +
+                _gBtn('gsRun', '📊 Pull Channel Stats') + _gRes('gsOut') +
+                `<hr style="border-color:rgba(255,255,255,0.08);margin:18px 0;">` +
+                _gLbl('Topic affinity — which topics does your audience reward? (comma separated)') +
+                _gIn('gsTopics', 'AI, automation, space') +
+                _gBtn('gsAffRun', '🎯 Compare Topics') + _gRes('gsAffOut');
+        case 'seo':
+            return _gLbl('Video title') + _gIn('geTitle', 'My amazing video title') +
+                _gLbl('Extra keywords (comma separated)') + _gIn('geKw', 'AI, shorts') +
+                _gBtn('geRun', '🏷 Build SEO Pack') + _gRes('geOut');
+        case 'music':
+            return _gLbl('Local library') + _gBtn('gmLocal', '🎧 List Local Tracks (assets/music/)') + _gRes('gmLocalOut') +
+                `<hr style="border-color:rgba(255,255,255,0.08);margin:18px 0;">` +
+                _gLbl('Pixabay music search (free downloads, needs API key)') +
+                _gIn('gmQ', 'cinematic upbeat') +
+                _gBtn('gmSearch', '🔍 Search Pixabay') + _gRes('gmOut');
+        case 'shorts':
+            return _gLbl('Finished video path') + _gIn('ghVideo', '/path/to/final_video.mp4') +
+                _gLbl('Number of shorts') +
+                `<select id="ghNum" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px;color:#fff;"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select>` +
+                _gBtn('ghRun', '✂️ Cut Viral Shorts') + _gRes('ghOut');
+        case 'schedule':
+            return _gLbl('Queue') + _gBtn('guRefresh', '↻ Refresh Queue') + _gRes('guList') +
+                `<hr style="border-color:rgba(255,255,255,0.08);margin:18px 0;">` +
+                _gLbl('Schedule a new upload') +
+                _gLbl('Video path') + _gIn('guVideo', '/path/to/final_video.mp4') +
+                _gLbl('Title') + _gIn('guTitle', 'Video title') +
+                _gLbl('Publish at (ISO, blank = due immediately)') + _gIn('guAt', '2026-10-01T18:00:00+05:30') +
+                _gLbl('Privacy') +
+                `<select id="guPrivacy" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px;color:#fff;"><option>private</option><option>unlisted</option><option>public</option></select>` +
+                _gBtn('guAdd', '➕ Add to Schedule') + _gRes('guOut');
+    }
+    return '';
+}
+
+function _growthRenderTabs() {
+    const bar = document.getElementById('growthTabs');
+    if (!bar) return;
+    bar.innerHTML = GROWTH_TABS.map(t =>
+        `<button data-gtab="${t.id}" class="btn-tb" style="${t.id === _growthActiveTab ? 'background:rgba(16,185,129,0.25);border-color:rgba(16,185,129,0.6);color:#fff;font-weight:700;' : ''}">${t.label}</button>`
+    ).join('');
+    bar.querySelectorAll('[data-gtab]').forEach(b => b.addEventListener('click', () => {
+        _growthActiveTab = b.dataset.gtab;
+        _growthRenderTabs();
+        document.getElementById('growthModalBody').innerHTML = growthTabHtml(_growthActiveTab);
+        _growthWireTab(_growthActiveTab);
+    }));
+}
+
+function _growthWireTab(tab) {
+    if (_shortsPollTimer) { clearInterval(_shortsPollTimer); _shortsPollTimer = null; }
+    const $ = id => document.getElementById(id);
+    const busy = (out, msg) => { $(out).innerHTML = `<div style="color:#94a3b8;">${msg}</div>`; };
+
+    if (tab === 'competitor' && $('gcRun')) {
+        $('gcRun').addEventListener('click', async () => {
+            busy('gcOut', 'Scanning channel…');
+            try {
+                const r = await fetch('/api/growth/competitor-scan', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel: $('gcChannel').value, user_topics: $('gcTopics').value, max_videos: $('gcMax').value }) });
+                const d = await r.json();
+                if (d.status !== 'success') throw new Error(d.message || 'failed');
+                const gaps = d.gaps || [];
+                $('gcOut').innerHTML =
+                    `<div style="font-weight:700;color:#10b981;margin-bottom:8px;">${escHtml(d.channel_name || d.channel || 'Channel')} — ${gaps.length} gap topic${gaps.length === 1 ? '' : 's'} found</div>` +
+                    (gaps.length ? gaps.map(g =>
+                        `<div style="background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.25);border-radius:10px;padding:10px 12px;margin-bottom:8px;">
+                            <div style="font-weight:700;color:#fff;">🎬 ${escHtml(g.suggested_title || g.topic || '')}</div>
+                            <div style="color:#94a3b8;margin-top:4px;">${escHtml(g.why || g.reason || '')}</div>
+                        </div>`).join('')
+                        : '<div style="color:#94a3b8;">No clear gaps — the rival covers everything you listed. Try broader topics.</div>');
+            } catch (e) { $('gcOut').innerHTML = `<div style="color:#f87171;">Error: ${escHtml(e.message)}</div>`; }
+        });
+    }
+
+    if (tab === 'stats') {
+        if ($('gsRun')) $('gsRun').addEventListener('click', async () => {
+            busy('gsOut', 'Pulling stats…');
+            try {
+                const r = await fetch('/api/growth/analytics?days=' + $('gsDays').value);
+                const d = await r.json();
+                if (d.status !== 'success') throw new Error(d.message || 'failed');
+                const p = d.performance || {};
+                const row = (k, v) => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);"><span style="color:#94a3b8;">${k}</span><span style="color:#fff;font-weight:700;">${v}</span></div>`;
+                $('gsOut').innerHTML = row('Views', p.views ?? '—') + row('Watch time (hrs)', p.watch_hours ?? '—') +
+                    row('Subscribers gained', p.subs ?? '—') + row('Avg. view duration', p.avg_view_duration ?? '—') +
+                    (p.note ? `<div style="color:#f59e0b;margin-top:8px;font-size:0.78rem;">${escHtml(p.note)}</div>` : '');
+            } catch (e) { $('gsOut').innerHTML = `<div style="color:#f87171;">Error: ${escHtml(e.message)}</div>`; }
+        });
+        if ($('gsAffRun')) $('gsAffRun').addEventListener('click', async () => {
+            busy('gsAffOut', 'Comparing topics…');
+            try {
+                const r = await fetch('/api/growth/topic-affinity', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ topics: $('gsTopics').value }) });
+                const d = await r.json();
+                if (d.status !== 'success') throw new Error(d.message || 'failed');
+                $('gsAffOut').innerHTML = (d.topics || []).map(t =>
+                    `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);"><span style="color:#fff;">${escHtml(t.topic || '')}</span><span style="color:#10b981;font-weight:700;">score ${escHtml(String(t.score ?? '—'))}</span></div>`
+                ).join('') || '<div style="color:#94a3b8;">No data yet — publish more videos first.</div>';
+            } catch (e) { $('gsAffOut').innerHTML = `<div style="color:#f87171;">Error: ${escHtml(e.message)}</div>`; }
+        });
+    }
+
+    if (tab === 'seo' && $('geRun')) {
+        $('geRun').addEventListener('click', async () => {
+            busy('geOut', 'Building SEO pack…');
+            try {
+                const r = await fetch('/api/seo/build', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: $('geTitle').value, keywords: $('geKw').value.split(',').map(s => s.trim()).filter(Boolean) }) });
+                const d = await r.json();
+                if (d.status !== 'success') throw new Error(d.message || 'failed');
+                $('geOut').innerHTML =
+                    _gLbl('Title options (click to copy)') +
+                    (d.titles || []).map(t => `<div onclick="navigator.clipboard.writeText(this.dataset.t);showToast('Copied','success')" data-t="${escHtml(t)}" title="Click to copy" style="cursor:pointer;padding:7px 10px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.25);border-radius:8px;margin-bottom:6px;color:#fff;">${escHtml(t)}</div>`).join('') +
+                    _gLbl('Description') +
+                    `<textarea readonly rows="6" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px 10px;color:#fff;font-size:0.78rem;">${escHtml(d.description || '')}</textarea>` +
+                    _gLbl('Tags (' + ((d.tags || []).join(', ').length) + '/500 chars)') +
+                    `<div style="color:#94a3b8;">${escHtml((d.tags || []).join(', '))}</div>` +
+                    (d.title_hindi ? _gLbl('Hindi title') + `<div style="color:#fff;">${escHtml(d.title_hindi)}</div>` : '');
+            } catch (e) { $('geOut').innerHTML = `<div style="color:#f87171;">Error: ${escHtml(e.message)}</div>`; }
+        });
+    }
+
+    if (tab === 'music') {
+        if ($('gmLocal')) $('gmLocal').addEventListener('click', async () => {
+            busy('gmLocalOut', 'Listing…');
+            try {
+                const d = await (await fetch('/api/music/tracks')).json();
+                $('gmLocalOut').innerHTML = d.status === 'success' && d.tracks.length
+                    ? d.tracks.map(t => `<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);color:#fff;">🎵 ${escHtml(t.name || t.path || '')}</div>`).join('')
+                    : '<div style="color:#94a3b8;">No local tracks — drop mp3/wav files into <b>assets/music/</b> or search Pixabay below.</div>';
+            } catch (e) { $('gmLocalOut').innerHTML = `<div style="color:#f87171;">Error: ${escHtml(e.message)}</div>`; }
+        });
+        if ($('gmSearch')) $('gmSearch').addEventListener('click', async () => {
+            busy('gmOut', 'Searching Pixabay…');
+            try {
+                const d = await (await fetch('/api/music/search?q=' + encodeURIComponent($('gmQ').value))).json();
+                if (d.status !== 'success') throw new Error(d.message || 'failed');
+                $('gmOut').innerHTML = (d.hits || []).map((h, i) =>
+                    `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                        <span style="color:#fff;">🎵 ${escHtml(h.name || h.title || ('Track ' + (i + 1)))}</span>
+                        <button class="btn-tb" data-dl="${i}" style="font-size:0.72rem;">⬇ Download</button>
+                    </div>`).join('') || '<div style="color:#94a3b8;">No results. Check your Pixabay key.</div>';
+                $('gmOut').querySelectorAll('[data-dl]').forEach(b => b.addEventListener('click', async () => {
+                    b.textContent = '⏳…';
+                    try {
+                        const dl = await (await fetch('/api/music/search?q=' + encodeURIComponent($('gmQ').value) + '&download=1')).json();
+                        b.textContent = '✅ Saved';
+                        showToast('Track downloaded to assets/music/', 'success');
+                    } catch (e) { b.textContent = '❌'; showToast('Download failed: ' + e.message, 'error'); }
+                }));
+            } catch (e) { $('gmOut').innerHTML = `<div style="color:#f87171;">Error: ${escHtml(e.message)}</div>`; }
+        });
+    }
+
+    if (tab === 'shorts' && $('ghRun')) {
+        $('ghRun').addEventListener('click', async () => {
+            busy('ghOut', 'Cutting shorts (background job)…');
+            try {
+                const r = await fetch('/api/shorts/cut', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ video_path: $('ghVideo').value, num_shorts: $('ghNum').value }) });
+                const d = await r.json();
+                if (d.status !== 'queued') throw new Error(d.message || 'failed');
+                const poll = async () => {
+                    const s = await (await fetch('/api/shorts/status/' + d.job_id)).json();
+                    const job = s.job || {};
+                    if (job.status === 'done') {
+                        clearInterval(_shortsPollTimer); _shortsPollTimer = null;
+                        $('ghOut').innerHTML = (job.result || []).map(x =>
+                            `<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);color:#10b981;">✅ ${escHtml(x.path || '')}</div>`).join('')
+                            || '<div style="color:#94a3b8;">Done — no shorts cut (check video length).</div>';
+                    } else if (job.status === 'error') {
+                        clearInterval(_shortsPollTimer); _shortsPollTimer = null;
+                        $('ghOut').innerHTML = `<div style="color:#f87171;">Error: ${escHtml(job.error || 'unknown')}</div>`;
+                    } else {
+                        $('ghOut').innerHTML = `<div style="color:#94a3b8;">Cutting… (job ${escHtml(d.job_id)})</div>`;
+                    }
+                };
+                _shortsPollTimer = setInterval(poll, 4000);
+                poll();
+            } catch (e) { $('ghOut').innerHTML = `<div style="color:#f87171;">Error: ${escHtml(e.message)}</div>`; }
+        });
+    }
+
+    if (tab === 'schedule') {
+        const loadQueue = async () => {
+            busy('guList', 'Loading queue…');
+            try {
+                const d = await (await fetch('/api/upload/schedule')).json();
+                const q = (d.queue || []).filter(x => x.status === 'scheduled' || x.status === 'failed');
+                $('guList').innerHTML = q.length ? q.map(x =>
+                    `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.06);">
+                        <span><b style="color:#fff;">${escHtml(x.title || '')}</b><br><span style="color:#94a3b8;font-size:0.75rem;">${escHtml(x.publish_at || 'due now')} · ${escHtml(x.privacy || 'private')} · ${escHtml(x.status || '')}${x.error ? ' — ' + escHtml(x.error) : ''}</span></span>
+                        <button class="btn-tb btn-danger" data-rm="${escHtml(x.id)}" style="font-size:0.72rem;">✕</button>
+                    </div>`).join('') : '<div style="color:#94a3b8;">Queue empty.</div>';
+                $('guList').querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', async () => {
+                    await fetch('/api/upload/schedule/' + b.dataset.rm, { method: 'DELETE' });
+                    loadQueue();
+                }));
+            } catch (e) { $('guList').innerHTML = `<div style="color:#f87171;">Error: ${escHtml(e.message)}</div>`; }
+        };
+        if ($('guRefresh')) $('guRefresh').addEventListener('click', loadQueue);
+        if ($('guAdd')) $('guAdd').addEventListener('click', async () => {
+            busy('guOut', 'Adding…');
+            try {
+                const r = await fetch('/api/upload/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ video_path: $('guVideo').value, title: $('guTitle').value, publish_at: $('guAt').value, privacy: $('guPrivacy').value }) });
+                const d = await r.json();
+                if (d.status !== 'success') throw new Error(d.message || 'failed');
+                $('guOut').innerHTML = '<div style="color:#10b981;">✅ Scheduled — the 5-minute background job will publish it on time.</div>';
+                loadQueue();
+            } catch (e) { $('guOut').innerHTML = `<div style="color:#f87171;">Error: ${escHtml(e.message)}</div>`; }
+        });
+        loadQueue();
+    }
+}
+
+function openGrowthModal() {
+    const m = document.getElementById('growthModal');
+    if (!m) return;
+    m.classList.remove('hidden');
+    _growthRenderTabs();
+    document.getElementById('growthModalBody').innerHTML = growthTabHtml(_growthActiveTab);
+    _growthWireTab(_growthActiveTab);
+}
+function closeGrowthModal() {
+    const m = document.getElementById('growthModal');
+    if (m) m.classList.add('hidden');
+    if (_shortsPollTimer) { clearInterval(_shortsPollTimer); _shortsPollTimer = null; }
+}
+
+function initGrowthPanel() {
+    document.getElementById('btnOpenGrowth')?.addEventListener('click', openGrowthModal);
+    document.getElementById('growthModalClose')?.addEventListener('click', closeGrowthModal);
+    document.getElementById('growthModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'growthModal') closeGrowthModal();
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => { initGrowthPanel(); });

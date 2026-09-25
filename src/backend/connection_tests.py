@@ -165,6 +165,18 @@ def test_llm(model_name: str = "", api_key: str = "") -> dict:
         except Exception:
             pass
 
+    # 6.5. OpenRouter (free :free models, no card needed)
+    or_key = (key if "openrouter" in model else "") or _env("OPENROUTER_API_KEY") or key
+    if or_key and not or_key.startswith("xpl_") and not or_key.startswith("LLM_"):
+        note("OpenRouter")
+        try:
+            r = requests.get("https://openrouter.ai/api/v1/models",
+                             headers={"Authorization": f"Bearer {or_key}"}, timeout=10)
+            if r.status_code == 200:
+                return _ok("OpenRouter", "OpenRouter free-model gateway is live.", t0)
+        except Exception:
+            pass
+
     # 7. Hugging Face Inference (free tier, optional token)
     hf_token = _env("HF_TOKEN", "HUGGINGFACE_TOKEN")
     note("Hugging Face")
