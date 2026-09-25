@@ -423,6 +423,7 @@ def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
                                 try:
                                     from PIL import Image as PilImg, ImageSequence as PilSeq
                                     import imageio
+                                    import numpy as np
                                     with PilImg.open(tmp_in) as anim_img:
                                         frames = [np.array(frame.convert("RGB")) for frame in PilSeq.Iterator(anim_img)]
                                     if frames:
