@@ -1576,8 +1576,12 @@ if __name__ == '__main__':
 
     try:
         port = int(os.environ.get('PORT', 3000))
-        print(f"[App] Launching Flask WSGI server on 0.0.0.0:{port}...", flush=True)
-        app.run(host='0.0.0.0', port=port, debug=False)
+        # Local-only by default: bind to 127.0.0.1 so the app (and its
+        # unauthenticated agent endpoints) is reachable only from this machine.
+        # Set HOST=0.0.0.0 explicitly if you ever need LAN access.
+        host = os.environ.get('HOST', '127.0.0.1')
+        print(f"[App] Launching Flask WSGI server on {host}:{port}...", flush=True)
+        app.run(host=host, port=port, debug=False)
     except Exception as e:
         print(f"[App Error] Flask failed to start: {e}", flush=True)
 
