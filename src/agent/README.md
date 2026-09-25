@@ -52,6 +52,48 @@ Text nodes route through `_chat_via_chain`, so every text consumer
 If the agent isn't running, calls fail fast with a clear message
 ("Background agent is not running…") instead of hanging.
 
+## Fallback chain: the agent acts like an AI (A → B → C)
+
+`generate_via_agent()` no longer dies when one site fails. It walks the
+ranked provider list (`free_providers.ranked_providers()`: known positive
+balance first, then unknown, then priority) — option A, then B, then C —
+and a pinned `free-web:<id>` keeps the old fail-loud behaviour (never
+silently swaps a provider you pinned).
+
+When **every** known option fails, the agent scouts the web for brand-new
+free alternatives and tries to bring one online by itself:
+
+1. `free_provision.ensure_capacity(kind)` runs the scout (Reddit + DDG).
+2. For the best pending candidates it enqueues a `provision` job.
+3. The agent **auto-creates an account** on the site (best effort, with
+   the signup email from `POST /api/free/config`) and probes its
+   image / image-to-video UI without burning credits.
+4. Sites that come online are promoted into the ledger automatically
+   (`auto_<domain>` providers). Sites behind CAPTCHA / email verification
+   are flagged as `needs_manual` / `needs_verification` in the Free AI tab
+   instead of failing silently.
+
+Auto-created account passwords live in `data/agent_accounts.json`
+(local only, git-ignored, mode 0600).
+
+## ChatGPT-written prompts (image + motion)
+
+Before any free-web generation, the orchestrator guarantees two things
+(`src/backend/free_prompting.py`):
+
+1. **Image prompt** — every scene gets an `image_prompt` written by
+   ChatGPT (via the free-web agent, `free-web:chatgpt_go`), grounded in
+   the main script: subject, mood, lighting, 9:16 composition.
+2. **Motion script** — every scene gets an `image_to_video_prompt` written
+   by ChatGPT from the main script **and** the scene's own image prompt:
+   camera move + in-frame dynamics (4–6s), continuing that scene's story
+   instead of a generic "slow push-in".
+
+Both run as one batched chat call per missing-prompt type (not one call
+per scene); scenes that already carry prompts (e.g. from gen-script) are
+left untouched. If the agent is down, prompting falls back to the normal
+model chain so the pipeline never dies.
+
 ## Credit ledger
 
 `src/backend/free_providers.py` — providers table with live balances.
@@ -65,7 +107,9 @@ enable/disable, delete, approve scout candidates, watch the job queue.
 
 `python -m src.agent.scout` (or the "Run scout" button) searches Reddit
 and DuckDuckGo for new free AI sites and saves them as **candidates**.
-Nothing becomes a live provider until you approve it in the Free AI tab.
+Manual scout runs need your one-click approval in the Free AI tab;
+the automatic fallback chain (above) can also provision candidates by
+itself when every known provider has failed.
 
 ## Provider plugins
 

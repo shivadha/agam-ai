@@ -26,6 +26,7 @@ import os
 import sys
 import time
 import traceback
+from contextlib import contextmanager
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, BASE_DIR)
@@ -75,6 +76,53 @@ def _provider_for_job(job: dict):
     return provider, recipe
 
 
+@contextmanager
+def _browser_page(pw, headless: bool = True):
+    """Launch the persistent-profile Chromium and yield a fresh page."""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(PROFILE_DIR, exist_ok=True)
+    sync_playwright = _playwright()
+    with sync_playwright() as p:
+        browser = p.chromium.launch_persistent_context(
+            PROFILE_DIR,
+            headless=headless,
+            args=["--disable-blink-features=AutomationControlled"],
+            viewport={"width": 1366, "height": 900},
+            user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/126.0.0.0 Safari/537.36"),
+        )
+        page = browser.new_page()
+        try:
+            yield page
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+
+def _process_provision(pw, headless: bool, job: dict) -> bool:
+    """Run an auto-provision job: sign up on a new free site + probe it."""
+    from src.agent import provision as provisioner
+    log.info("[job %s] provision: %s", job["id"],
+             (job.get("prompt") or "")[:80])
+    try:
+        with _browser_page(pw, headless) as page:
+            result = provisioner.run_provision(page, job)
+        jobqueue.complete_job(job["id"], result_text=json.dumps(result))
+        log.info("[job %s] provision -> %s (%s)", job["id"],
+                 result.get("status"), result.get("reason"))
+    except Exception:
+        jobqueue.fail_job(job["id"], traceback.format_exc(limit=5))
+        log.exception("[job %s] provision crashed", job["id"])
+    return True
+
+
 def process_one(pw, headless: bool = True) -> bool:
     """Claim and run a single job. Returns True if a job was processed."""
     job = jobqueue.claim_next_job()
@@ -82,31 +130,19 @@ def process_one(pw, headless: bool = True) -> bool:
         return False
     log.info("[job %s] claimed: %s/%s", job["id"], job["provider_id"], job["kind"])
 
+    # ── auto-provisioning: scouted site -> try to bring it online ──
+    if job["kind"] == "provision":
+        return _process_provision(pw, headless, job)
+
     try:
         provider, recipe = _provider_for_job(job)
     except KeyError as e:
         jobqueue.fail_job(job["id"], str(e))
         return True
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(PROFILE_DIR, exist_ok=True)
-
     sniffer = ResponseSniffer(recipe.get("api_patterns"))
-    browser_ctx = None
     try:
-        sync_playwright = _playwright()
-        with sync_playwright() as p:
-            browser = p.chromium.launch_persistent_context(
-                PROFILE_DIR,
-                headless=headless,
-                args=["--disable-blink-features=AutomationControlled"],
-                viewport={"width": 1366, "height": 900},
-                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/126.0.0.0 Safari/537.36"),
-            )
-            browser_ctx = browser
-            page = browser.new_page()
+        with _browser_page(pw, headless) as page:
             sniffer.attach(page)
             try:
                 if provider.needs_login(page):
@@ -121,10 +157,6 @@ def process_one(pw, headless: bool = True) -> bool:
                     live_balance = read_balance(page, recipe, sniffer)
                 except Exception:
                     live_balance = None
-                try:
-                    page.close()
-                except Exception:
-                    pass
             jobqueue.complete_job(
                 job["id"],
                 result_path=result.get("result_path"),
@@ -146,12 +178,6 @@ def process_one(pw, headless: bool = True) -> bool:
     except Exception:
         jobqueue.fail_job(job["id"], traceback.format_exc(limit=5))
         log.exception("[job %s] crashed", job["id"])
-    finally:
-        if browser_ctx is not None:
-            try:
-                browser_ctx.close()
-            except Exception:
-                pass
     return True
 
 

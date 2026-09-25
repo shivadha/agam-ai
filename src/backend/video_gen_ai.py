@@ -710,8 +710,9 @@ def _generate_huggingface_svd(image_path: str, prompt: str, api_key: str, output
     """
     import shutil
     from gradio_client import Client, handle_file
+    from src.backend.connection_tests import clean_token as _clean_token
 
-    token = api_key or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    token = _clean_token(api_key or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN"))
 
     # 1. Attempt Stable Video Diffusion Space
     try:

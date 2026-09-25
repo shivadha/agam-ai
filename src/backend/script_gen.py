@@ -78,7 +78,8 @@ def _generate_hf_instruct(system_prompt: str, user_prompt: str, max_new_tokens: 
     Zero-key fallback via Hugging Face Inference API (Qwen2.5-7B-Instruct).
     Used only when no configured provider produced output.
     """
-    hf_token = os.environ.get("HF_TOKEN", "").strip() or os.environ.get("HUGGINGFACE_TOKEN", "").strip()
+    from src.backend.connection_tests import clean_token as _clean_token
+    hf_token = _clean_token(os.environ.get("HF_TOKEN", "")).strip() or os.environ.get("HUGGINGFACE_TOKEN", "").strip()
     chat_text = (
         "<|im_start|>system\n" + system_prompt.strip() + "<|im_end|>\n"
         "<|im_start|>user\n" + user_prompt.strip() + "<|im_end|>\n"
