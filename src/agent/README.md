@@ -133,6 +133,27 @@ Manual scout runs need your one-click approval in the Free AI tab;
 the automatic fallback chain (above) can also provision candidates by
 itself when every known provider has failed.
 
+Fetching is powered by **Scrapling** (`D4Vinci/Scrapling`) when installed
+(`pip install "scrapling[fetchers]"` + `scrapling install` — step 3 of
+`setup_agent.bat`), in a fast → stealth → legacy chain:
+
+- **fast** — TLS-impersonated HTTP (quick, light);
+- **stealth** — a real camoufox browser that bypasses Cloudflare
+  Turnstile out of the box;
+- **legacy** — plain urllib, so the scout works even without Scrapling.
+
+Parsing uses Scrapling's **adaptive selectors**: the first successful
+parse banks each element's signature (`auto_save`); later runs relocate
+the elements by similarity if DuckDuckGo/Reddit redesign their markup
+(`adaptive`), instead of silently returning zero results. Blocked pages
+(403/429, "checking your browser", captchas) escalate to the next tier
+automatically.
+
+Every fresh candidate also gets a light homepage **pre-check** that
+enriches the quota hint ("50 free credits · signup required") before you
+approve it. The scout records what it learns in agent memory —
+which fetch tier works per source, and a lesson if a source goes dark.
+
 ## Provider plugins
 
 `src/agent/providers/` — one file per site: `gemini.py`, `veo.py`,
