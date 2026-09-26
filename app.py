@@ -976,6 +976,38 @@ def api_free_config_set():
                     "signup_email": cfg.get("signup_email")})
 
 
+@app.route('/api/free/memory', methods=['GET'])
+@login_required
+def api_free_memory_list():
+    """What the background agent has learned: facts, lessons, preferences."""
+    from src.agent import memory as agent_memory
+    scope = (request.args.get('scope') or '').strip() or None
+    if scope:
+        items = agent_memory.recall(scope, limit=100)
+    else:
+        from src.database import get_db, _db_lock
+        with _db_lock:
+            conn = get_db()
+            try:
+                items = [dict(r) for r in conn.execute(
+                    "SELECT * FROM agent_memory ORDER BY updated_at DESC"
+                    " LIMIT 100").fetchall()]
+            finally:
+                conn.close()
+    return jsonify({"status": "success", "memories": items,
+                    "stats": agent_memory.stats()})
+
+
+@app.route('/api/free/memory/<int:memory_id>', methods=['DELETE'])
+@login_required
+def api_free_memory_forget(memory_id):
+    """Make the agent forget one memory."""
+    from src.agent import memory as agent_memory
+    ok = agent_memory.forget(memory_id)
+    return jsonify({"status": "success" if ok else "error",
+                    "forgotten": ok})
+
+
 @app.route('/api/repurpose/export', methods=['POST'])
 @login_required
 def api_repurpose_export():

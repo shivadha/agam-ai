@@ -207,12 +207,27 @@ def _try_signup(page, url: str, email: str) -> dict:
             "password": password}
 
 
-def _probe_capabilities(page, kinds: list) -> dict:
+def _hinted_button_labels(hints: list[str] | None) -> list[str]:
+    """Extract remembered generate-button labels from memory texts like
+    "[known] (auto_example.com) generate button labelled 'Create'"."""
+    labels = []
+    for h in hints or []:
+        m = re.search(r"generate button labelled '([^']+)'", h)
+        if m and m.group(1) not in labels:
+            labels.append(m.group(1))
+    return labels
+
+
+def _probe_capabilities(page, kinds: list, hints: list[str] | None = None) -> dict:
     """Detect usable generation UI without submitting anything.
 
     Returns e.g. {"video": {"upload": "input[type=file] selector ...",
     "prompt": ..., "generate": ...}, "image": {...}}.
+
+    hints: remembered button labels from agent memory — tried first, so
+    the probe reuses what worked before instead of re-guessing.
     """
+    hinted = _hinted_button_labels(hints)
     probe: dict = {}
     for kind in kinds:
         entry: dict = {}
@@ -232,11 +247,25 @@ def _probe_capabilities(page, kinds: list) -> dict:
                 entry["prompt_fields"] = prompt_loc.count()
         except Exception:
             pass
-        # Generate button.
+        # Generate button — remembered labels first, generic regex fallback.
         try:
-            gen = page.get_by_role("button", name=GENERATE_RE)
-            if gen.count() > 0:
-                entry["generate_buttons"] = gen.count()
+            found = None
+            for label in hinted:
+                cand = page.get_by_role(
+                    "button", name=re.compile(re.escape(label), re.I))
+                if cand.count() > 0:
+                    found = label
+                    break
+            if found is None:
+                gen = page.get_by_role("button", name=GENERATE_RE)
+                if gen.count() > 0:
+                    try:
+                        found = (gen.first.inner_text() or "").strip()[:40]
+                    except Exception:
+                        found = "generic"
+            if found:
+                entry["generate_buttons"] = 1
+                entry["generate_label"] = found
         except Exception:
             pass
         # A <video> element already on the page hints at video output.
@@ -288,7 +317,8 @@ def run_provision(page, job: dict) -> dict:
                 "reason": signup.get("reason"), "account_ref": ref}
 
     # Signed in (or no signup needed) — probe the UI.
-    probe = _probe_capabilities(page, kinds)
+    # Pass remembered selectors so the probe reuses what worked before.
+    probe = _probe_capabilities(page, kinds, hints=job.get("agent_memories"))
     ref = ""
     if signup.get("password"):
         ref = _save_account(url, email, signup["password"])

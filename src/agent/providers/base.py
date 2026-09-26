@@ -61,6 +61,17 @@ def _default_state_file() -> str:
     return os.path.join(root, "data", "agent_strategy_state.json")
 
 
+def get_last_strategy(provider_id: str) -> str | None:
+    """Last strategy a provider's StrategyRotator picked, without needing
+    the strategy list. Used by the memory system to record what worked."""
+    try:
+        with open(_default_state_file()) as f:
+            state = json.load(f)
+        return (state.get(provider_id) or {}).get("last_strategy")
+    except Exception:
+        return None
+
+
 class StrategyRotator:
     """Rotates a provider's interaction strategies so no two consecutive
     runs take the same path.
@@ -129,3 +140,9 @@ class FreeWebProvider:
 
     def generate(self, page, job: dict, out_dir: str) -> dict:
         raise NotImplementedError
+
+    def memories(self, job: dict) -> list[str]:
+        """What the agent has learned about this provider — injected by
+        the agent loop before generate() runs. Plugins can use these to
+        adapt (e.g. try a remembered selector first)."""
+        return job.get("agent_memories") or []

@@ -103,6 +103,28 @@ Balance hits 0 → provider auto-retires (`exhausted`).
 Manage everything in the **Automation → 🆓 Free AI** tab:
 enable/disable, delete, approve scout candidates, watch the job queue.
 
+## Agent memory (it learns)
+
+`src/agent/memory.py` — the agent no longer starts every run from zero.
+An `agent_memory` table stores three kinds of memory:
+
+- **facts** — stable truths: "auto_foo.com: generate button labelled
+  'Create'", "chatgpt_go: last successful text job via chat_box"
+- **lessons** — learned from failures: "gemini_web video failing: login
+  required" (identical failures dedupe and gain confidence; 3× repeated
+  logouts escalate to a global "check the login session" lesson)
+- **preferences** — what worked best: "strategy 'video_chip' works for
+  video on gemini_web"
+
+Loop: before each job the agent **recalls** relevant memories and injects
+them into the job (`job["agent_memories"]`, also readable in plugins via
+`self.memories(job)`); after each job it **learns** — failures become
+lessons, successes refresh the "last known good" fact. The provision
+probe saves its findings as facts and consults them on re-provision, so a
+site's generate-button label is remembered, not re-guessed. Stale
+low-confidence lessons are pruned automatically (`memory.prune()`).
+View/forget memories in the Free AI tab via `GET/DELETE /api/free/memory`.
+
 ## Scout
 
 `python -m src.agent.scout` (or the "Run scout" button) searches Reddit
