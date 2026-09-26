@@ -976,6 +976,38 @@ def api_free_config_set():
                     "signup_email": cfg.get("signup_email")})
 
 
+@app.route('/api/free/memory', methods=['GET'])
+@login_required
+def api_free_memory_list():
+    """What the background agent has learned: facts, lessons, preferences."""
+    from src.agent import memory as agent_memory
+    scope = (request.args.get('scope') or '').strip() or None
+    if scope:
+        items = agent_memory.recall(scope, limit=100)
+    else:
+        from src.database import get_db, _db_lock
+        with _db_lock:
+            conn = get_db()
+            try:
+                items = [dict(r) for r in conn.execute(
+                    "SELECT * FROM agent_memory ORDER BY updated_at DESC"
+                    " LIMIT 100").fetchall()]
+            finally:
+                conn.close()
+    return jsonify({"status": "success", "memories": items,
+                    "stats": agent_memory.stats()})
+
+
+@app.route('/api/free/memory/<int:memory_id>', methods=['DELETE'])
+@login_required
+def api_free_memory_forget(memory_id):
+    """Make the agent forget one memory."""
+    from src.agent import memory as agent_memory
+    ok = agent_memory.forget(memory_id)
+    return jsonify({"status": "success" if ok else "error",
+                    "forgotten": ok})
+
+
 @app.route('/api/repurpose/export', methods=['POST'])
 @login_required
 def api_repurpose_export():
@@ -1617,6 +1649,34 @@ def api_get_audio_stats():
         from src.backend.audio_agent.library import AudioLibrary
         lib = AudioLibrary()
         return jsonify({"status": "success", "stats": lib.stats()})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/audio-library/trending')
+@login_required
+def api_get_trending_sounds():
+    """Top trending meme/SFX/music sounds by viral score (downloaded only)."""
+    try:
+        from src.backend.audio_agent.library import AudioLibrary
+        lib = AudioLibrary()
+        category = request.args.get('category', 'meme')
+        limit = request.args.get('limit', 12, type=int)
+        data = lib.browse(category=category, downloaded_only=True,
+                          per_page=max(1, min(limit, 50)))
+        sounds = data.get("sounds", [])
+        return jsonify({"status": "success", "category": category,
+                        "total": data.get("total", 0), "sounds": [
+                            {"id": s.get("id"), "name": s.get("name"),
+                             "filename": s.get("filename"),
+                             "source": s.get("source"),
+                             "emotion": s.get("emotion"),
+                             "energy_level": s.get("energy_level"),
+                             "viral_score": s.get("viral_score"),
+                             "use_count": s.get("use_count"),
+                             "has_local_file": bool(s.get("local_path"))}
+                            for s in sounds
+                        ]})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

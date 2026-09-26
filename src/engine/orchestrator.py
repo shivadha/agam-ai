@@ -94,6 +94,23 @@ class WorkflowEngine:
                 return node_res[key]
         return None
 
+    def _collect_sfx_timelines(self) -> List[dict]:
+        """Merge every 'sfx_timeline' list found across node states.
+
+        Multiple nodes (gen-sfx, meme-sound, audio-agent) can each emit
+        SFX events; the assembler needs the union, chronologically sorted,
+        not just the first one found.
+        """
+        merged: List[dict] = []
+        for node_res in self.state.get_all().values():
+            if not node_res:
+                continue
+            tl = node_res.get('sfx_timeline')
+            if isinstance(tl, list):
+                merged.extend([e for e in tl if isinstance(e, dict)])
+        merged.sort(key=lambda e: float(e.get('time', 0) or 0))
+        return merged
+
     def execute_node(self, node: dict):
         node_id = node['id']
         node_type = node.get('type')
@@ -417,7 +434,8 @@ class WorkflowEngine:
                 scenes = node_data.get('scenes') or self._find_in_state('scenes')
                 
                 music_path = self._find_in_state('music_path')
-                sfx_timeline = self._find_in_state('sfx_timeline')
+                # Merge timelines from gen-sfx, meme-sound, audio-agent, ...
+                sfx_timeline = self._collect_sfx_timelines() or None
                 topic_title = self._find_in_state('topic_title') or self._find_in_state('topic') or 'PulseForge Short'
                 viral_score = float(self._find_in_state('score') or 85.0)
                             
@@ -558,14 +576,54 @@ class WorkflowEngine:
                 result = {'status': 'success', 'node_type': node_type, 'hook': hook, **hook_visuals}
 
             elif node_type == 'bg-music':
-                from src.backend.music_engine import get_music_for_emotion
+                # Sound-library first: real downloaded tracks, kept fresh by
+                # the Scrapling scout. Falls back to local assets/music/, then
+                # the legacy hardcoded engine.
+                import random as _random
+                from src.backend.audio_agent import sync as _audio_sync
                 emotion = node_data.get('emotion') or self._find_in_state('emotion') or 'curiosity'
-                music_path = get_music_for_emotion(emotion)
-                result = {'status': 'success', 'node_type': node_type, 'music_path': music_path}
+                _audio_sync.ensure_fresh("music", min_downloaded=3)
+                music_path = None
+                track_name = None
+                try:
+                    from src.backend.audio_agent.library import AudioLibrary
+                    _lib = AudioLibrary()
+                    cands = _lib.find_by_emotion(emotion, category="music", limit=10)
+                    if not cands:
+                        cands = _lib.browse(category="music", downloaded_only=True,
+                                            per_page=10).get("sounds", [])
+                    cands = [c for c in cands
+                             if c.get("local_path") and os.path.exists(c["local_path"])]
+                    if cands:
+                        # Top-ranked by viral_score; slight variety across runs.
+                        pick = _random.choice(cands[:3])
+                        music_path = pick["local_path"]
+                        track_name = pick.get("name")
+                        print(f"[bg-music] library pick: {track_name}")
+                except Exception as e:
+                    print(f"[bg-music] library note: {e}")
+                if not music_path:
+                    try:
+                        from src.backend.music import list_tracks
+                        tracks = list_tracks()
+                        if tracks:
+                            music_path = tracks[0]["path"]
+                            track_name = tracks[0].get("name")
+                            print(f"[bg-music] local assets pick: {track_name}")
+                    except Exception as e:
+                        print(f"[bg-music] assets/music note: {e}")
+                if not music_path:
+                    from src.backend.music_engine import get_music_for_emotion
+                    music_path = get_music_for_emotion(emotion)
+                result = {'status': 'success', 'node_type': node_type,
+                          'music_path': music_path, 'track_name': track_name,
+                          'emotion': emotion}
 
             elif node_type == 'gen-sfx':
-                from src.backend.sfx_engine import ensure_sfx_assets, build_sfx_timeline
-                sfx_map = ensure_sfx_assets()
+                # Real scraped SFX from the sound library first (kept fresh by
+                # the Scrapling scout); procedural synth only as fallback.
+                from src.backend.audio_agent import sync as _audio_sync
+                _audio_sync.ensure_fresh("sfx", min_downloaded=5)
                 scenes = self._find_in_state('scenes') or []
                 audio_path = self._find_in_state('audio_path')
                 total_duration = 45.0
@@ -576,8 +634,76 @@ class WorkflowEngine:
                             total_duration = clip.duration
                     except Exception:
                         pass
-                sfx_timeline = build_sfx_timeline(scenes, total_duration)
+                sfx_timeline = []
+                sfx_map = {}
+                try:
+                    from src.backend.sfx_engine import build_sfx_timeline_from_library
+                    sfx_timeline = build_sfx_timeline_from_library(scenes, total_duration)
+                    if sfx_timeline:
+                        print(f"[gen-sfx] {len(sfx_timeline)} real library SFX placed")
+                except Exception as e:
+                    print(f"[gen-sfx] library timeline note: {e}")
+                if not sfx_timeline:
+                    from src.backend.sfx_engine import ensure_sfx_assets, build_sfx_timeline
+                    sfx_map = ensure_sfx_assets()
+                    sfx_timeline = build_sfx_timeline(scenes, total_duration)
+                    print("[gen-sfx] library empty — procedural SFX fallback")
                 result = {'status': 'success', 'node_type': node_type, 'sfx_timeline': sfx_timeline, 'sfx_map': sfx_map}
+
+            elif node_type == 'meme-sound':
+                # Drop a trending meme sound into the video at a chosen moment.
+                # The event merges with every other sfx_timeline in assemble-video.
+                from src.backend.audio_agent import sync as _audio_sync
+                from src.backend.audio_agent.library import AudioLibrary
+                _audio_sync.ensure_fresh("meme", min_downloaded=3)
+                keyword = (node_data.get('keyword') or node_data.get('query') or '').strip().lower()
+                lib = AudioLibrary()
+                meme = None
+                if keyword:
+                    hits = lib.find_by_tags([keyword], limit=10)
+                    hits = [h for h in hits
+                            if h.get("category") == "meme"
+                            and h.get("local_path") and os.path.exists(h["local_path"])]
+                    if hits:
+                        meme = hits[0]
+                        print(f"[meme-sound] keyword '{keyword}' -> {meme.get('name')}")
+                if meme is None:
+                    # Trending pick: highest viral_score among downloaded memes.
+                    data = lib.browse(category="meme", downloaded_only=True, per_page=10)
+                    sounds = [s for s in data.get("sounds", [])
+                              if s.get("local_path") and os.path.exists(s["local_path"])]
+                    if sounds:
+                        meme = sounds[0]
+                        print(f"[meme-sound] trending pick: {meme.get('name')}")
+                if meme is None:
+                    raise ValueError("meme-sound: no meme sounds in the library yet — "
+                                     "run a sound-library sync first.")
+                # Timing: explicit at_second > hook moment (~1.2s) > 25% mark.
+                try:
+                    at_second = float(node_data.get('at_second')) if node_data.get('at_second') is not None else None
+                except (TypeError, ValueError):
+                    at_second = None
+                if at_second is None:
+                    voice_path = self._find_in_state('audio_path')
+                    total_dur = 45.0
+                    if voice_path:
+                        try:
+                            from moviepy import AudioFileClip
+                            with AudioFileClip(voice_path) as clip:
+                                total_dur = float(clip.duration or 45.0)
+                        except Exception:
+                            pass
+                    at_second = round(total_dur * 0.25, 2)
+                try:
+                    volume = float(node_data.get('volume', 0.8))
+                except (TypeError, ValueError):
+                    volume = 0.8
+                event = {"time": max(0.0, at_second), "path": meme["local_path"],
+                         "volume": volume, "name": meme.get("name", "")}
+                result = {'status': 'success', 'node_type': node_type,
+                          'meme_path': meme["local_path"], 'meme_name': meme.get("name"),
+                          'meme_at_second': event["time"],
+                          'sfx_timeline': [event]}
 
             elif node_type == 'store-analytics':
                 from src.backend.analytics import init_analytics_table, store_video_record

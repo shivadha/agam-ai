@@ -165,6 +165,79 @@ class AudioScraper:
             os.makedirs(os.path.join(ASSETS_DIR, sub), exist_ok=True)
 
     # ─────────────────────────────────────────────────
+    # PUBLIC: Trending sync via the Scrapling scout
+    # ─────────────────────────────────────────────────
+    def run_trending_sync(self, max_downloads: int = 40) -> dict:
+        """Discover trending sounds via the Scrapling-powered sound scout
+        (MyInstants trending memes, Pixabay SFX/music, Mixkit) and sync
+        them into the local library. Best-effort: never raises."""
+        from . import sound_scout
+        print("[AudioAgent] Starting trending sound sync (Scrapling scout)...")
+        self.lib.log("trending_sync_start", f"max_downloads={max_downloads}")
+        try:
+            found = sound_scout.discover_trending(max_per_source=10)
+        except Exception as e:
+            print(f"[AudioAgent] Trending discovery failed: {e}")
+            self.lib.log("trending_sync_failed", str(e))
+            return {"downloaded": 0, "failed": 0, "indexed": 0, "error": str(e)}
+
+        results = {}
+        total_dl = 0
+        for key in ("meme", "sfx", "music"):
+            dl = fl = idx = 0
+            for rec in found.get(key, []):
+                if total_dl >= max_downloads:
+                    break
+                try:
+                    outcome = self._index_record(rec)
+                except Exception as e:
+                    print(f"[AudioAgent] index failed for {rec.get('name')}: {e}")
+                    outcome = "failed"
+                idx += 1
+                if outcome == "downloaded":
+                    dl += 1
+                    total_dl += 1
+                    time.sleep(0.3)
+                elif outcome == "failed":
+                    fl += 1
+            results[key] = {"downloaded": dl, "failed": fl, "indexed": idx}
+
+        self.lib.log("trending_sync_complete", json.dumps(results))
+        print(f"[AudioAgent] Trending sync complete: {results}")
+        return results
+
+    def _index_record(self, rec: dict) -> str:
+        """Upsert one scout record and download its audio.
+
+        Returns 'downloaded' | 'exists' | 'failed'.
+        """
+        subdir = {"meme": "meme", "sfx": "sfx", "music": "music"}.get(
+            rec.get("category"), "sfx")
+        filename = f"{rec.get('source', 'scout')}_{self._sanitize(rec.get('name', 'sound'))}.mp3"
+        sound_id = self.lib.upsert(
+            name=rec.get("name", "Untitled sound"),
+            filename=filename,
+            source_url=rec.get("audio_url", ""),
+            source=rec.get("source", "scout"),
+            category=rec.get("category", "sfx"),
+            subcategory=rec.get("subcategory", "scraped"),
+            tags=rec.get("tags", []),
+            emotion=rec.get("emotion", "energetic"),
+            energy_level=int(rec.get("energy_level", 6)),
+            is_music=1 if rec.get("category") == "music" else 0,
+        )
+        local_path = os.path.join(ASSETS_DIR, subdir, filename)
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 500:
+            self.lib.mark_downloaded(
+                sound_id, local_path, os.path.getsize(local_path) // 1024)
+            return "exists"
+        success, size_kb = self._download(rec.get("audio_url", ""), local_path)
+        if success:
+            self.lib.mark_downloaded(sound_id, local_path, size_kb)
+            return "downloaded"
+        return "failed"
+
+    # ─────────────────────────────────────────────────
     # PUBLIC: Main sync entry point
     # ─────────────────────────────────────────────────
     def run_full_sync(self, max_downloads: int = 60) -> dict:
@@ -180,6 +253,7 @@ class AudioScraper:
             "curated_sfx": self._sync_curated_sfx(),
             "pixabay_sfx": self._sync_pixabay_sfx(max_downloads=15),
             "myinstants_memes": self._sync_myinstants(max_downloads=20),
+            "trending": self.run_trending_sync(max_downloads=max_downloads),
         }
 
         total = sum(r.get("downloaded", 0) for r in results.values())
@@ -266,122 +340,119 @@ class AudioScraper:
         return {"downloaded": downloaded, "failed": failed, "total": len(CURATED_SFX)}
 
     # ─────────────────────────────────────────────────
-    # SOURCE 3: Pixabay Sound Effects (public JSON search)
+    # SOURCE 3: Pixabay Sound Effects (Scrapling scout)
     # ─────────────────────────────────────────────────
     def _sync_pixabay_sfx(self, max_downloads: int = 15) -> dict:
-        """
-        Uses Pixabay's public API (no key required for browsing previews).
-        Searches for high-energy viral-style SFX.
-        """
-        print("[AudioAgent] Syncing from Pixabay SFX...")
-        queries = [
-            ("transition swoosh", "sfx", "transition", "energetic", 7, ["transition", "whoosh", "swoosh"]),
-            ("cinematic impact boom", "sfx", "impact", "shock", 9, ["impact", "boom", "cinematic", "hit"]),
-            ("notification ding", "sfx", "notification", "energetic", 5, ["notification", "ding", "alert"]),
-            ("success achievement", "sfx", "success", "energetic", 6, ["success", "win", "achievement"]),
-            ("horror suspense sting", "sfx", "sting", "fear", 8, ["horror", "suspense", "sting"]),
-        ]
-
+        """Scrape Pixabay SFX search results via the Scrapling-powered
+        sound scout (fast -> stealth -> legacy fetch chain)."""
+        from . import sound_scout
+        print("[AudioAgent] Syncing from Pixabay SFX (scout)...")
         downloaded = 0
         failed = 0
+        indexed = 0
 
-        for query, category, subcategory, emotion, energy, tags in queries:
+        for query in sound_scout.TRENDING_SFX_QUERIES:
             if downloaded >= max_downloads:
                 break
             try:
-                # Pixabay public search (no API key needed for JSON format)
-                encoded_q = urllib.parse.quote(query)
-                api_url = f"https://pixabay.com/api/sounds/?key=no-key-needed&q={encoded_q}&per_page=5"
-                # Use direct HTML search as fallback since API key required
-                # Instead, we'll use known good Pixabay CDN patterns
-                # Skip - already covered by curated catalog
-                pass
+                records = sound_scout.scrape_pixabay_sfx(query, limit=4)
             except Exception as e:
-                print(f"[AudioAgent] Pixabay search failed for '{query}': {e}")
+                print(f"[AudioAgent] Pixabay scout failed for '{query}': {e}")
                 failed += 1
+                continue
+            for rec in records:
+                if downloaded >= max_downloads:
+                    break
+                indexed += 1
+                try:
+                    outcome = self._index_record(rec)
+                except Exception as e:
+                    print(f"[AudioAgent] index failed for {rec.get('name')}: {e}")
+                    outcome = "failed"
+                if outcome == "downloaded":
+                    downloaded += 1
+                    time.sleep(0.3)
+                elif outcome == "failed":
+                    failed += 1
 
-        # Note: Pixabay SFX API requires registration. We cover this with the curated catalog.
-        print(f"[AudioAgent] Pixabay SFX: {downloaded} downloaded (curated catalog used as primary)")
-        return {"downloaded": downloaded, "failed": failed, "note": "Curated catalog used as primary source"}
+        print(f"[AudioAgent] Pixabay SFX: {downloaded} downloaded, {indexed} indexed, {failed} failed")
+        return {"downloaded": downloaded, "failed": failed, "indexed": indexed}
 
     # ─────────────────────────────────────────────────
-    # SOURCE 4: MyInstants Meme Sounds (public API)
+    # SOURCE 4: MyInstants Meme Sounds (Scrapling scout)
     # ─────────────────────────────────────────────────
     def _sync_myinstants(self, max_downloads: int = 20) -> dict:
-        """
-        Fetches trending meme sounds from MyInstants public API.
-        """
-        print("[AudioAgent] Syncing from MyInstants meme library...")
+        """Fetch trending meme sounds via the Scrapling-powered sound scout
+        (scrapes https://www.myinstants.com/en/trending/). Falls back to the
+        legacy MyInstants JSON API attempt if the scout finds nothing."""
+        from . import sound_scout
+        print("[AudioAgent] Syncing from MyInstants meme library (scout)...")
         downloaded = 0
         failed = 0
         indexed = 0
 
         try:
+            records = sound_scout.scrape_myinstants_trending(limit=max_downloads)
+        except Exception as e:
+            print(f"[AudioAgent] MyInstants scout failed: {e}")
+            records = []
+
+        if not records:
+            # Legacy fallback: try the MyInstants JSON API directly.
+            records = self._myinstants_api_fallback(max_downloads)
+
+        for rec in records:
+            if downloaded >= max_downloads:
+                break
+            indexed += 1
+            try:
+                outcome = self._index_record(rec)
+            except Exception as e:
+                print(f"[AudioAgent] MyInstants sound failed: {e}")
+                outcome = "failed"
+            if outcome == "downloaded":
+                downloaded += 1
+                time.sleep(0.3)
+            elif outcome == "failed":
+                failed += 1
+
+        print(f"[AudioAgent] MyInstants: {downloaded} downloaded, {indexed} indexed, {failed} failed")
+        return {"downloaded": downloaded, "failed": failed, "indexed": indexed}
+
+    def _myinstants_api_fallback(self, max_downloads: int) -> list:
+        """Legacy fallback: MyInstants JSON API via plain urllib.
+
+        Returns scout-style records. [] on any failure.
+        """
+        records = []
+        try:
             api_url = "https://www.myinstants.com/api/v1/instants/?format=json&page=1&page_size=50"
             req = urllib.request.Request(api_url, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-
-            sounds = data.get("results", [])
-            print(f"[AudioAgent] MyInstants: Got {len(sounds)} sounds")
-
-            for sound in sounds[:max_downloads]:
-                try:
-                    name = sound.get("name", "Unknown Meme Sound")
-                    sound_url = sound.get("sound", "")
-
-                    if not sound_url:
-                        continue
-
-                    # Make URL absolute
-                    if sound_url.startswith("/"):
-                        sound_url = f"https://www.myinstants.com{sound_url}"
-
-                    filename = f"myinstants_{self._sanitize(name)}.mp3"
-                    emotion = self._guess_emotion_from_name(name)
-                    tags = self._extract_tags_from_name(name)
-
-                    sound_id = self.lib.upsert(
-                        name=name,
-                        filename=filename,
-                        source_url=sound_url,
-                        source="myinstants",
-                        category="meme",
-                        subcategory="internet-meme",
-                        tags=tags,
-                        emotion=emotion,
-                        energy_level=7,
-                        is_music=0
-                    )
-                    indexed += 1
-
-                    local_path = os.path.join(ASSETS_DIR, "meme", filename)
-                    if not os.path.exists(local_path) or os.path.getsize(local_path) < 100:
-                        success, size_kb = self._download(sound_url, local_path)
-                        if success:
-                            self.lib.mark_downloaded(sound_id, local_path, size_kb)
-                            downloaded += 1
-                            time.sleep(0.3)
-                        else:
-                            failed += 1
-                    else:
-                        self.lib.mark_downloaded(sound_id, local_path,
-                                                  os.path.getsize(local_path) // 1024)
-
-                except Exception as e:
-                    print(f"[AudioAgent] MyInstants sound failed: {e}")
-                    failed += 1
-
-        except urllib.error.URLError as e:
-            print(f"[AudioAgent] MyInstants API unreachable: {e}")
-            return {"downloaded": 0, "failed": 0, "indexed": 0,
-                    "note": "MyInstants API unavailable - network required"}
+            for sound in data.get("results", [])[:max_downloads]:
+                name = sound.get("name", "Unknown Meme Sound")
+                sound_url = sound.get("sound", "")
+                if not sound_url:
+                    continue
+                if sound_url.startswith("/"):
+                    sound_url = f"https://www.myinstants.com{sound_url}"
+                emotion = self._guess_emotion_from_name(name)
+                records.append({
+                    "name": name,
+                    "audio_url": sound_url,
+                    "page_url": api_url,
+                    "source": "myinstants",
+                    "category": "meme",
+                    "subcategory": "internet-meme",
+                    "tags": self._extract_tags_from_name(name),
+                    "emotion": emotion,
+                    "energy_level": 7,
+                })
+            print(f"[AudioAgent] MyInstants API fallback: {len(records)} sounds")
         except Exception as e:
-            print(f"[AudioAgent] MyInstants sync error: {e}")
-            return {"downloaded": 0, "failed": 0, "indexed": indexed, "error": str(e)}
-
-        print(f"[AudioAgent] MyInstants: {downloaded} downloaded, {indexed} indexed, {failed} failed")
-        return {"downloaded": downloaded, "failed": failed, "indexed": indexed}
+            print(f"[AudioAgent] MyInstants API fallback unreachable: {e}")
+        return records
 
     # ─────────────────────────────────────────────────
     # HELPERS

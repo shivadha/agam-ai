@@ -103,6 +103,28 @@ Balance hits 0 → provider auto-retires (`exhausted`).
 Manage everything in the **Automation → 🆓 Free AI** tab:
 enable/disable, delete, approve scout candidates, watch the job queue.
 
+## Agent memory (it learns)
+
+`src/agent/memory.py` — the agent no longer starts every run from zero.
+An `agent_memory` table stores three kinds of memory:
+
+- **facts** — stable truths: "auto_foo.com: generate button labelled
+  'Create'", "chatgpt_go: last successful text job via chat_box"
+- **lessons** — learned from failures: "gemini_web video failing: login
+  required" (identical failures dedupe and gain confidence; 3× repeated
+  logouts escalate to a global "check the login session" lesson)
+- **preferences** — what worked best: "strategy 'video_chip' works for
+  video on gemini_web"
+
+Loop: before each job the agent **recalls** relevant memories and injects
+them into the job (`job["agent_memories"]`, also readable in plugins via
+`self.memories(job)`); after each job it **learns** — failures become
+lessons, successes refresh the "last known good" fact. The provision
+probe saves its findings as facts and consults them on re-provision, so a
+site's generate-button label is remembered, not re-guessed. Stale
+low-confidence lessons are pruned automatically (`memory.prune()`).
+View/forget memories in the Free AI tab via `GET/DELETE /api/free/memory`.
+
 ## Scout
 
 `python -m src.agent.scout` (or the "Run scout" button) searches Reddit
@@ -110,6 +132,27 @@ and DuckDuckGo for new free AI sites and saves them as **candidates**.
 Manual scout runs need your one-click approval in the Free AI tab;
 the automatic fallback chain (above) can also provision candidates by
 itself when every known provider has failed.
+
+Fetching is powered by **Scrapling** (`D4Vinci/Scrapling`) when installed
+(`pip install "scrapling[fetchers]"` + `scrapling install` — step 3 of
+`setup_agent.bat`), in a fast → stealth → legacy chain:
+
+- **fast** — TLS-impersonated HTTP (quick, light);
+- **stealth** — a real camoufox browser that bypasses Cloudflare
+  Turnstile out of the box;
+- **legacy** — plain urllib, so the scout works even without Scrapling.
+
+Parsing uses Scrapling's **adaptive selectors**: the first successful
+parse banks each element's signature (`auto_save`); later runs relocate
+the elements by similarity if DuckDuckGo/Reddit redesign their markup
+(`adaptive`), instead of silently returning zero results. Blocked pages
+(403/429, "checking your browser", captchas) escalate to the next tier
+automatically.
+
+Every fresh candidate also gets a light homepage **pre-check** that
+enriches the quota hint ("50 free credits · signup required") before you
+approve it. The scout records what it learns in agent memory —
+which fetch tier works per source, and a lesson if a source goes dark.
 
 ## Provider plugins
 

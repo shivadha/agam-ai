@@ -137,6 +137,25 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_agent_jobs_status ON agent_jobs(status, created_at);
             CREATE INDEX IF NOT EXISTS idx_free_providers_status ON free_providers(status, enabled, priority);
+
+            -- Background agent long-term memory --------------------------------
+            -- facts: stable truths ("veo_web generate button = 'Create'").
+            -- lessons: learned from failures ("chatgpt_go logged out 2026-09-20").
+            -- preferences: what worked best ("strategy video_chip wins on gemini_web").
+            CREATE TABLE IF NOT EXISTS agent_memory (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope       TEXT NOT NULL DEFAULT 'global',
+                kind        TEXT NOT NULL DEFAULT 'fact',
+                content     TEXT NOT NULL,
+                norm        TEXT NOT NULL,
+                confidence  REAL NOT NULL DEFAULT 0.5,
+                occurrences INTEGER NOT NULL DEFAULT 1,
+                successes   INTEGER NOT NULL DEFAULT 0,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(scope, kind, norm)
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_memory_scope ON agent_memory(scope, kind, confidence);
         ''')
 
         # Auto-migration: ensure image_url exists on legacy tables

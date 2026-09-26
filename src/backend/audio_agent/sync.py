@@ -65,3 +65,30 @@ if __name__ == "__main__":
     print(f"Sync took {time.time() - start_time:.2f} seconds.")
     print("Results:", res)
     sys.exit(0)
+
+
+def ensure_fresh(category: str, min_downloaded: int = 5,
+                 max_downloads: int = 40) -> bool:
+    """Make sure the local library has enough ``category`` sounds.
+
+    If fewer than ``min_downloaded`` sounds are stored locally, a background
+    sync is kicked off (non-blocking) so the library keeps filling itself
+    with trending sounds. Returns True when the library already has enough,
+    False when a sync was triggered (caller should use what's available —
+    the next run will have more). Never raises.
+    """
+    try:
+        lib = AudioLibrary()
+        data = lib.browse(category=category, downloaded_only=True,
+                          per_page=1)
+        count = int(data.get("total", 0) or 0)
+        if count < min_downloaded:
+            print(f"[AudioAgent Sync] Library thin on '{category}' "
+                  f"({count} < {min_downloaded}) — triggering background sync.")
+            lib.log("ensure_fresh_triggered", f"category={category} count={count}")
+            start_background_sync(max_downloads=max_downloads)
+            return False
+        return True
+    except Exception as e:
+        print(f"[AudioAgent Sync] ensure_fresh note: {e}")
+        return True

@@ -32,8 +32,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 sys.path.insert(0, BASE_DIR)
 
 from src.agent import queue as jobqueue
+from src.agent import memory as agent_memory
 from src.agent.balance import ResponseSniffer, read_balance
-from src.agent.providers.base import LoginRequired, ProviderError
+from src.agent.providers.base import LoginRequired, ProviderError, get_last_strategy
 from src.agent.providers.registry import get_provider, known_providers
 from src.backend import free_providers as ledger
 
@@ -117,8 +118,29 @@ def _process_provision(pw, headless: bool, job: dict) -> bool:
         jobqueue.complete_job(job["id"], result_text=json.dumps(result))
         log.info("[job %s] provision -> %s (%s)", job["id"],
                  result.get("status"), result.get("reason"))
+        # Learn: a successful probe becomes reusable facts about the site.
+        if result.get("status") == "active":
+            pid = job["provider_id"]
+            for kind, entry in (result.get("probe") or {}).items():
+                label = entry.get("generate_label")
+                if label:
+                    agent_memory.remember(
+                        pid, "fact",
+                        f"generate button labelled '{label}' for {kind}",
+                        confidence=0.8)
+                if entry.get("prompt_fields"):
+                    agent_memory.remember(
+                        pid, "fact",
+                        f"prompt field present ({entry['prompt_fields']} found) "
+                        f"for {kind}", confidence=0.8)
+        else:
+            agent_memory.learn_from_job(
+                job, ok=False,
+                detail=f"provision {result.get('status')}: "
+                       f"{result.get('reason') or ''}")
     except Exception:
         jobqueue.fail_job(job["id"], traceback.format_exc(limit=5))
+        agent_memory.learn_from_job(job, ok=False, detail="provision crashed")
         log.exception("[job %s] provision crashed", job["id"])
     return True
 
@@ -130,6 +152,12 @@ def process_one(pw, headless: bool = True) -> bool:
         return False
     log.info("[job %s] claimed: %s/%s", job["id"], job["provider_id"], job["kind"])
 
+    # ── memory: recall what the agent learned, learn from this run ──
+    job["agent_memories"] = agent_memory.recall_texts(job["provider_id"])
+    if job["agent_memories"]:
+        log.info("[job %s] recalling %d memories", job["id"],
+                 len(job["agent_memories"]))
+
     # ── auto-provisioning: scouted site -> try to bring it online ──
     if job["kind"] == "provision":
         return _process_provision(pw, headless, job)
@@ -138,6 +166,7 @@ def process_one(pw, headless: bool = True) -> bool:
         provider, recipe = _provider_for_job(job)
     except KeyError as e:
         jobqueue.fail_job(job["id"], str(e))
+        agent_memory.learn_from_job(job, ok=False, detail=str(e))
         return True
 
     sniffer = ResponseSniffer(recipe.get("api_patterns"))
@@ -163,6 +192,9 @@ def process_one(pw, headless: bool = True) -> bool:
                 result_text=result.get("result_text"),
                 balance_after=live_balance,
             )
+            # Learn: record what worked (strategy from the rotator, if any).
+            agent_memory.learn_from_job(
+                job, ok=True, detail=get_last_strategy(job["provider_id"]) or "")
             # Async ledger update: fire-and-forget, never blocks the loop.
             try:
                 updated = ledger.record_usage(job["provider_id"], live_balance)
@@ -174,9 +206,11 @@ def process_one(pw, headless: bool = True) -> bool:
             log.info("[job %s] done (balance=%s)", job["id"], live_balance)
     except (ProviderError, LoginRequired) as e:
         jobqueue.fail_job(job["id"], str(e))
+        agent_memory.learn_from_job(job, ok=False, detail=str(e))
         log.warning("[job %s] failed: %s", job["id"], e)
     except Exception:
         jobqueue.fail_job(job["id"], traceback.format_exc(limit=5))
+        agent_memory.learn_from_job(job, ok=False, detail="unexpected crash")
         log.exception("[job %s] crashed", job["id"])
     return True
 

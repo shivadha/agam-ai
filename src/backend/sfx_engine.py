@@ -465,6 +465,139 @@ def build_sfx_timeline(
 
 
 # ---------------------------------------------------------------------------
+# Library-backed timeline (real scraped sounds instead of procedural synth)
+# ---------------------------------------------------------------------------
+
+# Scene-cue -> library tag mapping. A scene whose 'sfx' hint or emotion
+# matches these tags gets a real downloaded sound from the audio library.
+_CUE_TAG_MAP: dict[str, tuple[str, ...]] = {
+    "whoosh": ("whoosh", "swoosh", "transition", "swish"),
+    "impact": ("impact", "boom", "hit", "thud", "explosion"),
+    "rise": ("riser", "rise", "build", "tension"),
+    "pop": ("pop", "click", "blip", "notification"),
+    "glitch": ("glitch", "digital", "error"),
+    "chime": ("chime", "ding", "success", "win", "achievement"),
+}
+
+_TRANSITION_TAGS = ("whoosh", "swoosh", "transition", "swish")
+
+
+def _pick_library_sfx(lib, tags: tuple[str, ...], exclude_ids: set) -> Optional[dict]:
+    """Best downloaded library SFX matching any of ``tags``."""
+    try:
+        hits = lib.find_by_tags(list(tags), limit=10)
+    except Exception:
+        return None
+    for h in hits:
+        if h.get("id") in exclude_ids:
+            continue
+        lp = h.get("local_path") or ""
+        if lp and os.path.exists(lp):
+            return h
+    return None
+
+
+def build_sfx_timeline_from_library(
+    scenes: list[dict],
+    total_duration: float,
+) -> list[dict]:
+    """Build an SFX timeline from REAL downloaded library sounds.
+
+    Same contract as :func:`build_sfx_timeline` — returns
+    ``[{"time", "path", "volume"}]`` with the max-1-SFX-per-2-seconds rule —
+    but every event points at a scraped sound file from the audio library
+    instead of a procedurally synthesized beep.
+
+    Placement logic:
+      * explicit ``scene["sfx"]`` hints are resolved to library sounds by tag
+      * every other scene boundary gets a transition (whoosh-style) sound
+      * scene ``emotion`` biases the pick via the library's emotion index
+
+    Returns [] when the library has no usable downloaded SFX — the caller
+    should then fall back to :func:`build_sfx_timeline`.
+    """
+    try:
+        from src.backend.audio_agent.library import AudioLibrary
+        lib = AudioLibrary()
+    except Exception as e:
+        logger.info("library SFX timeline: AudioLibrary unavailable (%s)", e)
+        return []
+
+    events: list[tuple[float, dict]] = []  # (time, sound_record)
+    used_ids: set = set()
+
+    # Normalize + sort scene boundaries.
+    boundaries: list[tuple[float, dict]] = []
+    for scene in scenes or []:
+        try:
+            t = float(scene.get("start_time", 0.0))
+        except (TypeError, ValueError):
+            t = 0.0
+        if 0.0 <= t <= total_duration:
+            boundaries.append((t, scene))
+    boundaries.sort(key=lambda b: b[0])
+
+    def _resolve(scene: dict, t: float) -> Optional[dict]:
+        # 1) explicit sfx hints -> tag search
+        raw = scene.get("sfx")
+        names: list[str] = []
+        if isinstance(raw, str):
+            names = [raw]
+        elif isinstance(raw, (list, tuple)):
+            names = [str(s) for s in raw]
+        for name in names:
+            tags = _CUE_TAG_MAP.get(name.lower().strip())
+            if tags:
+                sound = _pick_library_sfx(lib, tags, used_ids)
+                if sound:
+                    return sound
+        # 2) emotion-biased pick
+        emotion = (scene.get("emotion") or "").strip().lower()
+        if emotion:
+            try:
+                cands = lib.find_by_emotion(emotion, category="sfx", limit=10)
+            except Exception:
+                cands = []
+            for c in cands:
+                if c.get("id") not in used_ids and c.get("local_path") \
+                        and os.path.exists(c["local_path"]):
+                    return c
+        # 3) default: transition whoosh on scene boundaries after t=0.5
+        if t > 0.5:
+            return _pick_library_sfx(lib, _TRANSITION_TAGS, used_ids)
+        return None
+
+    # Enforce max-1-SFX-per-2-seconds on the slots FIRST, then resolve a
+    # (diverse) real sound for each surviving slot. A dropped slot never
+    # consumes a sound from the diversity pool.
+    timeline: list[dict] = []
+    last_time: float = -_MIN_SFX_INTERVAL  # allow first event at t=0
+    for t, scene in boundaries:
+        if t - last_time < _MIN_SFX_INTERVAL:
+            continue
+        sound = _resolve(scene, t)
+        if sound is None:
+            continue
+        lp = sound.get("local_path")
+        if not lp or not os.path.exists(lp):
+            continue
+        used_ids.add(sound.get("id"))
+        volume = 0.70
+        try:
+            # Louder for high-energy sounds, softer for subtle ones.
+            energy = int(sound.get("energy_level", 6) or 6)
+            volume = round(min(0.9, max(0.4, 0.45 + energy * 0.04)), 2)
+        except (TypeError, ValueError):
+            pass
+        timeline.append({"time": t, "path": lp, "volume": volume,
+                         "name": sound.get("name", "")})
+        last_time = t
+
+    logger.info("library SFX timeline: %d events from real sounds", len(timeline))
+    return timeline
+
+
+# ---------------------------------------------------------------------------
 # Quick smoke-test  (python -m src.backend.sfx_engine)
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
