@@ -56,17 +56,19 @@ def claim_next_job() -> dict | None:
 
 def complete_job(job_id: str, result_path: str | None = None,
                  result_text: str | None = None,
-                 balance_after: int | None = None):
+                 balance_after: int | None = None,
+                 strategy: str | None = None):
     with _db_lock:
         conn = get_db()
         try:
             conn.execute("""
                 UPDATE agent_jobs
                 SET status = 'done', result_path = ?, result_text = ?,
-                    balance_after = ?, finished_at = CURRENT_TIMESTAMP,
+                    balance_after = ?, strategy = COALESCE(?, strategy),
+                    finished_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            """, (result_path, result_text, balance_after, job_id))
+            """, (result_path, result_text, balance_after, strategy, job_id))
             conn.commit()
         finally:
             conn.close()

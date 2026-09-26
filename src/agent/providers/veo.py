@@ -233,13 +233,13 @@ def _submit_and_download(page, out_dir, timeout_s=1500):
     # Generation takes minutes. Poll for a playable <video>.
     deadline = time.time() + timeout_s  # 25 min max
     video_url = None
-    seen = set()
+    seen = []  # insertion-ordered; last resort only
 
     # Also sniff network responses for mp4s as a backup source.
     def on_response(resp):
         url = resp.url
         if re.search(r"\.mp4(\?|$)", url) and url not in seen:
-            seen.add(url)
+            seen.append(url)
 
     page.on("response", on_response)
     try:
@@ -253,7 +253,10 @@ def _submit_and_download(page, out_dir, timeout_s=1500):
                         break
                 except Exception:
                     continue
-            if video_url or seen:
+            # Only the real <video> element's src counts as success. A stray
+            # .mp4 in network traffic (UI preview, tutorial clip) must NOT end
+            # the wait early — 'seen' is a last-resort fallback after the deadline.
+            if video_url:
                 break
             time.sleep(10)
     finally:
@@ -262,7 +265,11 @@ def _submit_and_download(page, out_dir, timeout_s=1500):
         except Exception:
             pass
 
-    video_url = video_url or (next(iter(seen)) if seen else None)
+    if not video_url and seen:
+        # Last resort: most recently observed .mp4 URL (insertion-ordered).
+        video_url = seen[-1]
+        print(f"[agent] [Veo] warning: no <video> element found; "
+              f"falling back to last sniffed .mp4 URL.")
     if not video_url:
         raise ProviderError("timed out waiting for Veo render (25 min)")
 

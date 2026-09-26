@@ -272,7 +272,8 @@ def _async_workflow_worker(run_id, payload):
                     else:
                         _workflow_runs[run_id]['logs'].append(f"Node {node_id} completed with status: {status}")
         
-        engine = WorkflowEngine(payload, on_node_status=update_node_status)
+        engine = WorkflowEngine(payload, on_node_status=update_node_status,
+                                run_id=run_id)
         results = engine.run()
         
         # Check if there are any failed nodes
@@ -1146,6 +1147,169 @@ def get_workflow_status(run_id):
         if not run:
             return jsonify({"status": "error", "message": "Workflow run not found"}), 404
         return jsonify(run)
+
+
+# ── Run history, Errors tab, resume-from-failure, per-node regenerate ────────
+# Every node execution is persisted (workflow_runs / node_results / node_logs)
+# by the engine, so a failed run resumes from the failed node instead of
+# from the beginning, and single nodes can be regenerated on demand.
+
+@app.route('/api/workflow/runs', methods=['GET'])
+@login_required
+def list_workflow_runs():
+    from src import database as db
+    db.init_db()
+    return jsonify({"status": "ok", "runs": db.get_workflow_runs(limit=50)})
+
+
+@app.route('/api/workflow/runs/<run_id>', methods=['GET'])
+@login_required
+def get_workflow_run_detail(run_id):
+    from src import database as db
+    import json as _json
+    db.init_db()
+    runs = [r for r in db.get_workflow_runs(limit=500) if r['run_id'] == run_id]
+    if not runs:
+        return jsonify({"status": "error", "message": "Run not found"}), 404
+    nodes = db.get_node_results(run_id)
+    for n in nodes:
+        try:
+            n['result'] = _json.loads(n.pop('result_json') or '{}')
+        except Exception:
+            n['result'] = {}
+        n.pop('inputs_json', None)
+    return jsonify({"status": "ok", "run": runs[0], "nodes": nodes,
+                    "history": {n['node_id']: db.get_node_result_history(run_id, n['node_id'])
+                                for n in nodes}})
+
+
+@app.route('/api/workflow/runs/<run_id>/errors', methods=['GET'])
+@login_required
+def get_workflow_run_errors(run_id):
+    """Exact per-node errors for the Errors tab in the execution console."""
+    from src import database as db
+    db.init_db()
+    return jsonify({"status": "ok", "run_id": run_id,
+                    "errors": db.get_node_logs(run_id, level='error', limit=200)})
+
+
+@app.route('/api/workflow/runs/<run_id>/logs', methods=['GET'])
+@login_required
+def get_workflow_run_logs(run_id):
+    from src import database as db
+    db.init_db()
+    level = (request.args.get('level') or '').strip() or None
+    return jsonify({"status": "ok", "run_id": run_id,
+                    "logs": db.get_node_logs(run_id, level=level, limit=500)})
+
+
+def _resume_worker(run_id, payload, from_node):
+    """Background resume: restores prior successful results, starts AT from_node."""
+    try:
+        from src.engine.orchestrator import WorkflowEngine
+
+        def update_node_status(node_id, status, result):
+            with _runs_lock:
+                if run_id in _workflow_runs:
+                    _workflow_runs[run_id]['nodes'][node_id] = {'status': status, 'result': result}
+
+        with _runs_lock:
+            if run_id in _workflow_runs:
+                _workflow_runs[run_id]['status'] = 'running'
+        engine = WorkflowEngine(payload, on_node_status=update_node_status, run_id=run_id)
+        # Prefill the in-memory results map with prior successful results so
+        # the live node map shows the whole run, not just the resumed tail.
+        try:
+            prior = get_node_results(run_id)
+            for nid, prow in prior.items():
+                if prow.get("status") == "success" and prow.get("result_json"):
+                    engine.results[nid] = json.loads(prow["result_json"])
+        except Exception:
+            pass
+        if not from_node:
+            from_node = engine.first_failed_node()
+        results = engine.run(resume_from_node=from_node)
+        has_errors = any(isinstance(v, dict) and v.get('status') == 'error'
+                         for v in results.values())
+        with _runs_lock:
+            if run_id in _workflow_runs:
+                _workflow_runs[run_id]['status'] = 'success' if not has_errors else 'partial'
+                _workflow_runs[run_id]['results'] = results
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        with _runs_lock:
+            if run_id in _workflow_runs:
+                _workflow_runs[run_id]['status'] = 'error'
+                _workflow_runs[run_id]['error'] = str(e)
+
+
+@app.route('/api/workflow/resume/<run_id>', methods=['POST'])
+@login_required
+def resume_workflow_run(run_id):
+    """Resume a failed run FROM the failed node (not from the beginning).
+
+    Body (JSON, all optional): {payload: updated workflow JSON,
+                                from_node: node id to start at}
+    When payload is omitted, the last saved payload for the run is reused.
+    """
+    from src import database as db
+    import json as _json
+    db.init_db()
+    data = request.get_json() or {}
+    payload = data.get('payload')
+    from_node = data.get('from_node')
+    if not payload:
+        with _runs_lock:
+            old = _workflow_runs.get(run_id)
+        payload = (old or {}).get('payload')
+    if not payload or not payload.get('nodes'):
+        return jsonify({"status": "error",
+                        "message": "No workflow payload to resume — pass {payload}."}), 400
+    topic = payload.get('name') or (payload.get('article') or {}).get('title') or 'Resumed run'
+    with _runs_lock:
+        _workflow_runs[run_id] = {
+            'run_id': run_id, 'status': 'running', 'topic': topic,
+            'payload': payload, 'nodes': {}, 'results': {},
+            'logs': [f"Resuming run {run_id[:8]} from failed node..."],
+            'created_at': datetime.datetime.utcnow().isoformat(),
+        }
+    threading.Thread(target=_resume_worker, args=(run_id, payload, from_node), daemon=True).start()
+    return jsonify({"status": "started", "run_id": run_id, "from_node": from_node,
+                    "message": "Workflow resuming from the failed node."})
+
+
+@app.route('/api/workflow/rerun-node', methods=['POST'])
+@login_required
+def rerun_single_node():
+    """Regenerate ONE node's output inside an existing run.
+
+    Body: {run_id, node_id, node (optional updated node {data})}.
+    Upstream results are restored from the DB; only this node executes.
+    """
+    data = request.get_json() or {}
+    run_id, node_id = data.get('run_id'), data.get('node_id')
+    if not run_id or not node_id:
+        return jsonify({"status": "error", "message": "Provide run_id and node_id."}), 400
+    with _runs_lock:
+        old = _workflow_runs.get(run_id)
+    payload = (data.get('payload') or (old or {}).get('payload') or {})
+    if not payload.get('nodes'):
+        return jsonify({"status": "error",
+                        "message": "No workflow payload — pass {payload} or resume first."}), 400
+    try:
+        from src.engine.orchestrator import WorkflowEngine
+        engine = WorkflowEngine(payload, run_id=run_id)
+        result = engine.rerun_node(node_id, (data.get('node') or {}).get('data'))
+        with _runs_lock:
+            if run_id in _workflow_runs:
+                _workflow_runs[run_id]['nodes'][node_id] = {'status': result.get('status'), 'result': result}
+                _workflow_runs[run_id]['results'][node_id] = result
+        return jsonify({"status": "ok", "node_id": node_id, "result": result})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # ── Live Pre-flight Node Connection Test API ─────────────────────────────────

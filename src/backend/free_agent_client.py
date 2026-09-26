@@ -69,8 +69,15 @@ def _enqueue_with(provider: dict, kind: str, prompt: str = "",
 
 
 def wait_for(job_id: str, timeout: int = 1500, poll: int = 5) -> dict:
-    """Block until the job finishes. Returns the job dict."""
+    """Block until the job finishes. Returns the job dict.
+
+    If the deadline hits while the agent is STILL actively working the job
+    (status running + fresh heartbeat), the wait is extended once by 50%
+    instead of failing over — failing over would start a SECOND provider
+    generating the same video while the first one is still rendering.
+    """
     deadline = time.time() + timeout
+    extended = False
     while time.time() < deadline:
         job = jobqueue.get_job(job_id)
         if not job:
@@ -80,6 +87,24 @@ def wait_for(job_id: str, timeout: int = 1500, poll: int = 5) -> dict:
         if job["status"] == "failed":
             raise FreeAgentError(f"agent job failed: {job.get('error') or 'unknown'}")
         time.sleep(poll)
+    if not extended and agent_alive():
+        job = jobqueue.get_job(job_id)
+        if job and job["status"] == "running":
+            extra = timeout // 2
+            print(f"[free-agent] job {job_id} still running and agent is alive — "
+                  f"extending wait by {extra}s instead of failing over "
+                  f"(avoids double-generating).")
+            deadline = time.time() + extra
+            extended = True
+            while time.time() < deadline:
+                job = jobqueue.get_job(job_id)
+                if not job:
+                    raise FreeAgentError(f"job {job_id} vanished from the queue")
+                if job["status"] == "done":
+                    return job
+                if job["status"] == "failed":
+                    raise FreeAgentError(f"agent job failed: {job.get('error') or 'unknown'}")
+                time.sleep(poll)
     raise FreeAgentError(f"agent job {job_id} timed out after {timeout}s")
 
 
@@ -109,7 +134,11 @@ def generate_via_agent(kind: str, prompt: str = "", input_path: str | None = Non
     def chain() -> list[dict]:
         if provider_id:
             p = ledger.get_provider(provider_id)
-            return [p] if p else []
+            # Fail loud on a pinned provider that isn't usable (disabled or
+            # exhausted) instead of silently queueing a job that can never run.
+            if p and p.get("enabled", True) and p.get("status") == "active":
+                return [p]
+            return []
         return ledger.ranked_providers(kind)
 
     candidates = chain()
@@ -187,8 +216,12 @@ def generate_image_file(prompt: str, provider_id: str | None = None,
 
 def generate_video_file(prompt: str, input_path: str | None = None,
                         provider_id: str | None = None,
-                        timeout: int = 1800) -> str:
-    """Convenience: returns the video file path or raises."""
+                        timeout: int = 2400) -> str:
+    """Convenience: returns the video file path or raises.
+
+    Default 40 min: video providers poll up to ~25 min for the render itself,
+    plus browser launch, login checks, strategy attempts and balance reads.
+    """
     r = generate_via_agent("video", prompt, input_path=input_path,
                            provider_id=provider_id, timeout=timeout)
     path = r.get("result_path")

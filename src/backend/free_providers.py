@@ -77,9 +77,13 @@ def upsert_provider(provider_id: str, name: str, url: str,
                     name=excluded.name, url=excluded.url, kinds=excluded.kinds,
                     quota_total=COALESCE(excluded.quota_total, free_providers.quota_total),
                     balance=COALESCE(excluded.balance, free_providers.balance),
-                    balance_recipe=excluded.balance_recipe,
+                    -- DB copy wins for admin-editable fields: re-seeding on
+                    -- every restart must NOT reset a hand-tuned balance_recipe
+                    -- or re-enable a provider the admin disabled in the Free AI tab.
+                    -- (Admin edits go through update_provider directly.)
+                    balance_recipe=free_providers.balance_recipe,
                     priority=excluded.priority, notes=excluded.notes,
-                    enabled=excluded.enabled, updated_at=CURRENT_TIMESTAMP
+                    enabled=free_providers.enabled, updated_at=CURRENT_TIMESTAMP
             """, (provider_id, name, url, json.dumps(kinds), quota_total, balance,
                   json.dumps(balance_recipe or {}), priority, notes, int(enabled)))
             conn.commit()

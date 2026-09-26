@@ -41,6 +41,15 @@ from src.backend import free_providers as ledger
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("free-agent")
+# pythonw discards stderr — without a file handler every crash is invisible.
+try:
+    _log_dir = os.path.join(BASE_DIR, "data")
+    os.makedirs(_log_dir, exist_ok=True)
+    _fh = logging.FileHandler(os.path.join(_log_dir, "agent.log"), encoding="utf-8")
+    _fh.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    logging.getLogger().addHandler(_fh)
+except Exception:
+    pass
 
 PROFILE_DIR = os.path.join(os.path.expanduser("~"), ".agam-agent", "profile")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output", "agent")
@@ -58,6 +67,31 @@ def _beat():
             json.dump({"ts": time.time()}, f)
     except Exception:
         pass
+
+
+def _beat_forever(stop_event):
+    """Background heartbeat so long jobs (25-min video renders) don't make
+    the agent look dead — the client TTL is only 90s."""
+    while not stop_event.wait(30):
+        _beat()
+
+
+def _already_running() -> bool:
+    """Single-instance guard: a second pythonw sharing the Chromium profile
+    would fail the profile lock AND poison the queue by claiming jobs it
+    can never run."""
+    try:
+        with open(PID_FILE) as f:
+            pid = int(f.read().strip())
+    except Exception:
+        return False
+    if pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, 0)  # alive?
+    except Exception:
+        return False  # stale PID file
+    return True
 
 
 def _playwright():
@@ -191,6 +225,7 @@ def process_one(pw, headless: bool = True) -> bool:
                 result_path=result.get("result_path"),
                 result_text=result.get("result_text"),
                 balance_after=live_balance,
+                strategy=get_last_strategy(job["provider_id"]) or "",
             )
             # Learn: record what worked (strategy from the rotator, if any).
             agent_memory.learn_from_job(
@@ -254,13 +289,24 @@ def main():
         return
 
     sync_playwright = _playwright()  # fail fast if missing
+    if _already_running():
+        # Message goes to agent.log (file handler) since pythonw has no console.
+        log.error("[agent] another instance is already running (see data/agent.pid) — exiting.")
+        print("[agent] another instance is already running — exiting.")
+        sys.exit(2)
     log.info("[agent] starting (headless=%s, poll=%ss)",
              not args.headful, args.poll)
     try:
+        os.makedirs(os.path.dirname(PID_FILE), exist_ok=True)
         with open(PID_FILE, "w") as f:
             f.write(str(os.getpid()))
     except Exception:
         pass
+    import threading as _threading
+    _hb_stop = _threading.Event()
+    _hb_thread = _threading.Thread(target=_beat_forever, args=(_hb_stop,),
+                                   daemon=True, name="agent-heartbeat")
+    _hb_thread.start()
     try:
         while True:
             _beat()
@@ -272,6 +318,7 @@ def main():
     except KeyboardInterrupt:
         log.info("[agent] stopped")
     finally:
+        _hb_stop.set()
         for p in (PID_FILE, HEARTBEAT_FILE):
             try:
                 os.remove(p)
