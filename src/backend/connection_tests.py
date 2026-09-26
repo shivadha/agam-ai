@@ -75,6 +75,25 @@ def _ping_hf_text(hf_token: str, t0: float):
         return None
 
 
+def _check_hf_whoami(hf_token: str) -> tuple[bool, str]:
+    """Validates Hugging Face token against whoami-v2 (fine-grained & classic) with fallback."""
+    if not hf_token:
+        return False, ""
+    try:
+        r = requests.get("https://huggingface.co/api/whoami-v2",
+                         headers={"Authorization": f"Bearer {hf_token}"}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return True, data.get("name") or data.get("fullname") or "user"
+        r = requests.get("https://huggingface.co/api/whoami",
+                         headers={"Authorization": f"Bearer {hf_token}"}, timeout=10)
+        if r.status_code == 200:
+            return True, r.json().get("name", "user")
+    except Exception:
+        pass
+    return False, ""
+
+
 def test_llm(model_name: str = "", api_key: str = "") -> dict:
     """
     Walk the same provider chain script_gen uses and return the first LIVE one.
@@ -260,28 +279,65 @@ def test_image(model_name: str = "", api_key: str = "") -> dict:
         except Exception as e:
             return _fail(f"Gemini unreachable: {e}", t0, "Imagen")
 
-    # Hugging Face (FLUX.1 / SD)
-    if any(k in model for k in ["flux", "huggingface", "hugging", "sd", "stable"]):
-        hf_token = clean_token(_env("HF_TOKEN", "HUGGINGFACE_TOKEN"))
-        if not hf_token:
-            return _fail("HF_TOKEN not set — Hugging Face image models need a token.", t0, "Hugging Face")
+    # Pollinations (check before Hugging Face so 'Pollinations FLUX' routes to Pollinations, not HF)
+    if "pollin" in model:
         try:
-            r = requests.get("https://huggingface.co/api/whoami",
-                             headers={"Authorization": f"Bearer {hf_token}"}, timeout=10)
-            if r.status_code == 200:
-                who = r.json().get("name", "?")
-                return _ok("Hugging Face", f"HF token valid (user: {who}) — FLUX.1 ready.", t0)
-            if r.status_code == 401:
-                return _fail(
-                    "Hugging Face rejected the saved token (HTTP 401) — it is invalid, "
-                    "expired, or revoked on Hugging Face's side. Fix: open "
-                    "https://huggingface.co/settings/tokens, create a new User Access "
-                    "Token (fine-grained tokens need the 'Make calls to Inference "
-                    "Providers' permission), then paste it fresh into API Keys → "
-                    "Hugging Face and re-run PreFlight.", t0, "Hugging Face")
-            return _fail(f"Hugging Face token check failed (HTTP {r.status_code}).", t0, "Hugging Face")
-        except Exception as e:
-            return _fail(f"Hugging Face unreachable: {e}", t0, "Hugging Face")
+            import random as _rand
+            seed = _rand.randint(1, 999999)
+            r = requests.get(
+                f"https://image.pollinations.ai/prompt/connection-test?model=turbo&width=128&height=128"
+                f"&nologo=true&seed={seed}",
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=6,
+            )
+            ctype = r.headers.get("Content-Type", "")
+            if r.status_code == 200 and "image" in ctype and len(r.content) > 2000:
+                return _ok("Pollinations", "Pollinations free image engine rendered live.", t0)
+        except Exception:
+            pass
+
+        # If Pollinations has high latency or temporary error, fall back to local GPU ComfyUI
+        try:
+            c_test = requests.get("http://127.0.0.1:8188/system_stats", timeout=3)
+            if c_test.status_code == 200:
+                return _ok("ComfyUI Local (Fallback)", "Pollinations busy/intermittent; local GPU ComfyUI ready as fallback.", t0)
+        except Exception:
+            pass
+
+        return _fail("Neither Pollinations nor local ComfyUI GPU server responded.", t0, "Pollinations")
+
+    # Hugging Face (FLUX.1 / SD)
+    if any(k in model for k in ["huggingface", "hugging", "hf"]) or (any(k in model for k in ["flux", "sd", "stable"]) and "pollin" not in model):
+        hf_token = clean_token(_env("HF_TOKEN", "HUGGINGFACE_TOKEN"))
+        hf_ok, who = _check_hf_whoami(hf_token)
+        if hf_ok:
+            return _ok("Hugging Face", f"HF token valid (user: {who}) — FLUX.1 ready.", t0)
+
+        # Token invalid or missing — check self-healing fallbacks (ComfyUI / Pollinations)
+        # to ensure the workflow is not blocked when free local or cloud engines are live
+        try:
+            c_test = requests.get("http://127.0.0.1:8188/system_stats", timeout=3)
+            if c_test.status_code == 200:
+                return _ok("ComfyUI Local (Fallback)", "HF token missing or expired; auto-routing to local GPU ComfyUI.", t0)
+        except Exception:
+            pass
+
+        try:
+            p_test = requests.get(
+                "https://image.pollinations.ai/prompt/connection-test?model=turbo&width=128&height=128&nologo=true",
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=15,
+            )
+            if p_test.status_code == 200 and len(p_test.content) > 2000:
+                return _ok("Pollinations (Fallback)", "HF token missing or expired; auto-routing to free Pollinations FLUX/Turbo.", t0)
+        except Exception:
+            pass
+
+        return _fail(
+            "Hugging Face rejected the saved token (HTTP 401) and no local ComfyUI or Pollinations fallback is reachable. "
+            "Fix: create a token at https://huggingface.co/settings/tokens and paste it in API Keys -> Hugging Face.",
+            t0, "Hugging Face"
+        )
 
     # Default: Pollinations free image engine — REAL tiny render as the live check
     try:
@@ -365,13 +421,9 @@ def test_video(provider: str = "", api_key: str = "") -> dict:
     hf_token = clean_token(_env("HF_TOKEN", "HUGGINGFACE_TOKEN"))
     if "huggingface" in prov or "svd" in prov or "cogvideo" in prov or not key:
         if hf_token:
-            try:
-                r = requests.get("https://huggingface.co/api/whoami",
-                                 headers={"Authorization": f"Bearer {hf_token}"}, timeout=10)
-                if r.status_code == 200:
-                    return _ok("Hugging Face Video", "HF token valid — SVD/CogVideoX cloud ready.", t0)
-            except Exception:
-                pass
+            hf_ok, who = _check_hf_whoami(hf_token)
+            if hf_ok:
+                return _ok("Hugging Face Video", f"HF token valid (user: {who}) — SVD/CogVideoX cloud ready.", t0)
 
     paid = ["luma", "runway", "kling", "pika", "veo", "minimax", "fal"]
     if any(p in prov for p in paid):

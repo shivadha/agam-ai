@@ -152,7 +152,7 @@ const NODE_CONFIGS = {
         { key:'hindi_dub', label:'Hindi Dub (2nd audio track — English stays primary)', type:'toggle', def:false },
     ],
     'gen-image': [
-        { key:'model',    label:'Image Model',   type:'select', opts:['HuggingFace FLUX.1 [Free]','Pollinations FLUX [Free]','ComfyUI (Local GPU)','DALL-E 3','Gemini (Imagen 3)'], def:'HuggingFace FLUX.1 [Free]' },
+        { key:'model',    label:'Image Model',   type:'select', opts:['Pollinations FLUX [Free]','ComfyUI (Local GPU)','HuggingFace FLUX.1 [Free]','DALL-E 3','Gemini (Imagen 3)'], def:'Pollinations FLUX [Free]' },
         { key:'api_key',  label:'API Key (Optional)', type:'text', placeholder:'Leave blank – uses HF_TOKEN from .env', def:'' },
         { key:'style',    label:'Visual Style',  type:'select', opts:['Cinematic 8K','Realistic','Artistic','Anime','Dark Moody'], def:'Cinematic 8K' },
         { key:'ratio',    label:'Aspect Ratio',  type:'select', opts:['9:16 (Shorts)','16:9 (YouTube)','1:1 (Square)'], def:'9:16 (Shorts)' },
