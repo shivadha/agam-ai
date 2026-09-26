@@ -52,6 +52,9 @@ def generate_video_from_image(image_path: str, prompt: str, duration: float = 4.
     # Queue up the requested provider first, then add backups
     if is_comfy_requested:
         providers_queue = ["comfyui"]
+    elif "minimax" in prov_lower and "space" in prov_lower:
+        # Explicit keyless request: free HF Spaces first, local ComfyUI next
+        providers_queue = ["minimax_space", "comfyui"]
     elif "minimax" in prov_lower:
         providers_queue = ["minimax", "fal_minimax", "comfyui"]
     else:
@@ -59,7 +62,7 @@ def generate_video_from_image(image_path: str, prompt: str, duration: float = 4.
         if "comfyui" not in providers_queue:
             providers_queue.insert(0, "comfyui")
 
-    backups = ["minimax", "fal_minimax", "fal_kling", "fal_luma", "kling", "huggingface", "luma", "runway", "pika", "veo"]
+    backups = ["minimax", "minimax_space", "fal_minimax", "fal_kling", "fal_luma", "kling", "huggingface", "luma", "runway", "pika", "veo"]
     for b in backups:
         if b not in providers_queue:
             providers_queue.append(b)
@@ -78,7 +81,7 @@ def generate_video_from_image(image_path: str, prompt: str, duration: float = 4.
         key_provider_name = p
         if p.startswith("fal_"):
             key_provider_name = "fal"
-        elif "minimax" in p:
+        elif "minimax" in p and p != "minimax_space":
             key_provider_name = "minimax"
         p_key = keys.get(key_provider_name, "")
 
@@ -95,6 +98,20 @@ def generate_video_from_image(image_path: str, prompt: str, duration: float = 4.
                 print(f"[video_gen_ai] ComfyUI notice: {comfy_err}")
                 if is_comfy_requested:
                     print(f"[video_gen_ai] Notice: ComfyUI is offline at {comfyui_base}. Start via start_comfyui.bat for GPU rendering. Moving to fallback...")
+            continue
+
+        # MiniMax-H3 via free HuggingFace Spaces — keyless (community GPU).
+        if p == "minimax_space":
+            print("[video_gen_ai] [MiniMax-H3 Space] Keyless H3 generation via free HuggingFace Spaces...")
+            try:
+                from src.backend.minimax_space import generate_minimax_h3_space
+                res_path = generate_minimax_h3_space(
+                    image_path, prompt, output_path, duration=duration)
+                if res_path and os.path.exists(res_path) and os.path.getsize(res_path) > 1000:
+                    print(f"[video_gen_ai] [SUCCESS] MiniMax-H3 Space generation succeeded: {res_path}")
+                    return res_path
+            except Exception as sp_err:
+                print(f"[video_gen_ai] MiniMax-H3 Space note: {sp_err}")
             continue
 
         if not p_key:

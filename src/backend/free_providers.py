@@ -320,3 +320,15 @@ def seed_builtin_providers():
         balance_recipe={"api_patterns": ["flow", "credits"], "dom_selector": "",
                         "regex": r"(\d+)\s*(?:credits?|videos?)\s*(?:left|remaining)"},
     )
+    upsert_provider(
+        "hailuo_web", "Hailuo AI (MiniMax H3, free signup)", "https://hailuoai.video/",
+        kinds=["video"], priority=4,
+        notes="MiniMax's official Hailuo 3.0 (H3) web product: free signup "
+              "(Google/Apple/Facebook/email) with free credits, no API key. "
+              "Text-to-video and image-to-video (Omni Reference). Each run "
+              "rotates through recorded strategies (reference-first / prompt-first / "
+              "aspect-first / keyboard-driven), a different path every run. "
+              "One-time login via --show-login; session reused afterwards.",
+        balance_recipe={"api_patterns": ["hailuoai", "credit"], "dom_selector": "",
+                        "regex": r"(\d+)\s*(?:credits?)\s*(?:left|remaining)"},
+    )

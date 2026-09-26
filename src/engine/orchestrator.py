@@ -8,6 +8,8 @@ import json
 from collections import defaultdict, deque
 from typing import Dict, Any, List
 
+from src.engine import node_fallbacks
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -81,9 +83,12 @@ class WorkflowEngine:
                     print(f"[WorkflowEngine] Callback error (end): {cb_err}")
 
             # CRITICAL SAFETY HALT: If any core node failed, STOP execution immediately!
+            # (A node only reaches 'error' when its on_failure policy is "fail",
+            #  or when the "fallback" policy exhausted every alternative way.)
             if res.get('status') == 'error':
                 err_msg = res.get('error', 'Unknown error')
-                print(f"[WorkflowEngine] CRITICAL HALT: Node {node_id} ({node.get('type')}) failed: {err_msg}. Aborting remaining pipeline nodes.", flush=True)
+                policy = res.get('on_failure', 'fail')
+                print(f"[WorkflowEngine] CRITICAL HALT (on_failure={policy}): Node {node_id} ({node.get('type')}) failed: {err_msg}. Aborting remaining pipeline nodes.", flush=True)
                 break
             
         return self.state.get_all()
@@ -962,10 +967,27 @@ class WorkflowEngine:
             import traceback
             traceback.print_exc()
             print(f"[WorkflowEngine] FAILED Node {node_id} ({node_type}): {e}", flush=True)
-            result = {
-                "status": "error",
-                "node_type": node_type,
-                "error": str(e)
-            }
+            # ── Node failure policy ──
+            # "fallback" (default): automatically try OTHER ways to fulfill
+            # the node (see src/engine/node_fallbacks.py). Only when every
+            # alternative fails does the node report an error.
+            # "fail": fail the whole cycle immediately (CRITICAL HALT below).
+            policy = node_fallbacks.resolve_policy(node_data, self.workflow)
+            fb_result = None
+            if policy == node_fallbacks.FALLBACK:
+                fb_result = node_fallbacks.attempt_fallbacks(
+                    self, node, node_type, node_data, inputs, e)
+            if fb_result is not None:
+                result = fb_result
+            else:
+                if policy == node_fallbacks.FALLBACK:
+                    print(f"[WorkflowEngine] Node {node_id}: all fallback strategies "
+                          f"failed — failing the cycle.", flush=True)
+                result = {
+                    "status": "error",
+                    "node_type": node_type,
+                    "error": str(e),
+                    "on_failure": policy,
+                }
             
         self.state.set(node_id, result)

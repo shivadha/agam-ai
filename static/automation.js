@@ -164,7 +164,7 @@ const NODE_CONFIGS = {
         { key:'custom_text', label:'Custom Text',     type:'text', placeholder:'Leave blank to use hook/title', def:'' },
     ],
     'img-to-video': [
-        { key:'provider', label:'AI Video Provider', type:'select', opts:['ComfyUI (Local Wan 2.1 / LTX) [Free GPU]','HuggingFace SVD [Free Cloud]','MiniMax-H3 (Free/Cloud)','fal.ai','Kling','Luma','Runway'], def:'ComfyUI (Local Wan 2.1 / LTX) [Free GPU]' },
+        { key:'provider', label:'AI Video Provider', type:'select', opts:['ComfyUI (Local Wan 2.1 / LTX) [Free GPU]','MiniMax-H3 (HF Space) [Free, No Key]','HuggingFace SVD [Free Cloud]','MiniMax-H3 (Free/Cloud)','fal.ai','Kling','Luma','Runway'], def:'ComfyUI (Local Wan 2.1 / LTX) [Free GPU]' },
         { key:'api_key',  label:'API Key (Optional)', type:'text', placeholder:'Leave blank for local/free mode', def:'' },
         { key:'motion',   label:'Motion Scale',  type:'select', opts:['Low','Medium','High'], def:'Medium' },
         { key:'ratio',    label:'Aspect Ratio',  type:'select', opts:['9:16 (Shorts)','16:9 (YouTube)'], def:'9:16 (Shorts)' },
@@ -237,6 +237,26 @@ const NODE_CONFIGS = {
         { key:'privacy',    label:'Privacy', type:'select', opts:['private','unlisted','public'], def:'private' },
     ],
 };
+
+// ──────────────────────────────────────────────────────────────
+// 🛟 ON-FAILURE POLICY — every node gets an "On Failure" setting.
+// "Try other ways (fallback)" (default): a failed node automatically
+// tries other ways to fulfill itself (other providers, graceful skips);
+// the cycle only halts when every alternative fails.
+// "Fail whole cycle": a node failure aborts the entire run immediately.
+// Backend: src/engine/node_fallbacks.py — the backend reads the label
+// directly ("Fail whole cycle" -> fail, anything else -> fallback).
+// ──────────────────────────────────────────────────────────────
+(function(){
+    const SKIP = new Set(['manual-trigger','schedule-trigger','article-trigger']);
+    const FIELD = { key:'on_failure', label:'On Failure 🛟', type:'select',
+        opts:['Try other ways (fallback)','Fail whole cycle'],
+        def:'Try other ways (fallback)' };
+    for (const [type, fields] of Object.entries(NODE_CONFIGS)) {
+        if (SKIP.has(type) || !Array.isArray(fields)) continue;
+        if (!fields.some(f => f.key === 'on_failure')) fields.push({...FIELD});
+    }
+})();
 
 // ──────────────────────────────────────────────────────────────
 // 💰 FREE MODE — one-click zero-cost provider presets per node type.
