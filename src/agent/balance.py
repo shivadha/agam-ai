@@ -77,18 +77,29 @@ class ResponseSniffer:
 
 
 def _search_credit_keys(obj, depth: int = 0) -> int | None:
+    """Two-pass search: first prefer keys with remaining/left semantics
+    (a plan-limit key like 'max_credits' must never be read as the balance),
+    then fall back to any credit-ish key."""
     if depth > 4:
         return None
     if isinstance(obj, dict):
+        weak = None
         for k, v in obj.items():
             kl = str(k).lower()
             if any(ck in kl for ck in CREDIT_KEYS) and isinstance(v, (int, float)):
                 iv = int(v)
                 if 0 <= iv < 1000000:
-                    return iv
+                    # Skip obvious plan-limit keys — they are not the balance.
+                    if any(bad in kl for bad in ("max_", "total", "limit", "plan_")):
+                        continue
+                    if any(good in kl for good in ("remaining", "left", "available")):
+                        return iv
+                    if weak is None:
+                        weak = iv
             r = _search_credit_keys(v, depth + 1)
             if r is not None:
                 return r
+        return weak
     elif isinstance(obj, list):
         for v in obj[:20]:
             r = _search_credit_keys(v, depth + 1)

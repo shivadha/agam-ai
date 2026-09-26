@@ -77,9 +77,13 @@ def upsert_provider(provider_id: str, name: str, url: str,
                     name=excluded.name, url=excluded.url, kinds=excluded.kinds,
                     quota_total=COALESCE(excluded.quota_total, free_providers.quota_total),
                     balance=COALESCE(excluded.balance, free_providers.balance),
-                    balance_recipe=excluded.balance_recipe,
+                    -- DB copy wins for admin-editable fields: re-seeding on
+                    -- every restart must NOT reset a hand-tuned balance_recipe
+                    -- or re-enable a provider the admin disabled in the Free AI tab.
+                    -- (Admin edits go through update_provider directly.)
+                    balance_recipe=free_providers.balance_recipe,
                     priority=excluded.priority, notes=excluded.notes,
-                    enabled=excluded.enabled, updated_at=CURRENT_TIMESTAMP
+                    enabled=free_providers.enabled, updated_at=CURRENT_TIMESTAMP
             """, (provider_id, name, url, json.dumps(kinds), quota_total, balance,
                   json.dumps(balance_recipe or {}), priority, notes, int(enabled)))
             conn.commit()
@@ -319,4 +323,16 @@ def seed_builtin_providers():
               "prompt-first / keyboard-driven), a different path every run.",
         balance_recipe={"api_patterns": ["flow", "credits"], "dom_selector": "",
                         "regex": r"(\d+)\s*(?:credits?|videos?)\s*(?:left|remaining)"},
+    )
+    upsert_provider(
+        "hailuo_web", "Hailuo AI (MiniMax H3, free signup)", "https://hailuoai.video/",
+        kinds=["video"], priority=4,
+        notes="MiniMax's official Hailuo 3.0 (H3) web product: free signup "
+              "(Google/Apple/Facebook/email) with free credits, no API key. "
+              "Text-to-video and image-to-video (Omni Reference). Each run "
+              "rotates through recorded strategies (reference-first / prompt-first / "
+              "aspect-first / keyboard-driven), a different path every run. "
+              "One-time login via --show-login; session reused afterwards.",
+        balance_recipe={"api_patterns": ["hailuoai", "credit"], "dom_selector": "",
+                        "regex": r"(\d+)\s*(?:credits?)\s*(?:left|remaining)"},
     )

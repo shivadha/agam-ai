@@ -210,25 +210,24 @@ def generate_hook(
     viral_angle_data: dict,
     model_name: str = "GPT-4o",
     custom_api_key: str = "",
-) -> str:
+) -> tuple:
     """
-    Generates a scroll-stopping hook (≤ 8 words) based on viral_angle_data.
+    Generates a scroll-stopping hook (<= 8 words) based on viral_angle_data.
 
-    Parameters
-    ----------
-    viral_angle_data : dict
-        Output from viral_angle.extract_viral_angle() — must contain at least
-        'emotion', 'hook_type', 'category', and 'viral_angle'.
-    model_name : str
-        Display name of the LLM to use.
-    custom_api_key : str
-        Optional direct API key for OpenAI or Google Gemini.
+    Provider chain (first valid hook wins):
+      1. _chat_via_chain — honors the node's selected model through the full
+         free provider chain (free-web agent, Ollama, Groq free,
+         OpenRouter :free, Pollinations, HF Inference).
+      2. Scraper — real viral video titles for the topic, mined via the
+         scout's fetch chain and adapted into hook lines.
+      3. Template fallback — always returns *something*.
 
-    Returns
-    -------
-    str
-        A single hook line, ≤ 8 words, ready for use as the opening line of a Short.
+    Returns (hook, source) where source is one of "llm", "scraper", "template".
+    Never raises — the template fallback is total.
     """
+    # Defensive: callers sometimes pass the raw angle string instead of a dict.
+    if not isinstance(viral_angle_data, dict):
+        viral_angle_data = {"viral_angle": str(viral_angle_data or "")}
     emotion = viral_angle_data.get("emotion", "curiosity")
     hook_type = viral_angle_data.get("hook_type", "curiosity_gap")
     category = viral_angle_data.get("category", "AI")
@@ -249,126 +248,45 @@ def generate_hook(
         "Write the hook now (max 8 words):"
     )
 
-    content_str: str | None = None
-
-    # Check if we should route to Ollama first
-    is_ollama = "ollama" in model_name.lower() or any(m in model_name.lower() for m in ["shivam-pro", "deepseek", "qwen"])
-    if is_ollama:
-        content_str = _generate_ollama(model_name, system_prompt, user_prompt)
-
     # ------------------------------------------------------------------
-    # 1. Try direct OpenAI API key
+    # 1. Full provider chain (free first) — honors the selected model.
     # ------------------------------------------------------------------
-    if not content_str and custom_api_key:
-        is_openai = "GPT" in model_name or "gpt" in model_name
-        is_gemini = "Gemini" in model_name or "gemini" in model_name
+    content_str = None
+    try:
+        from src.backend.script_gen import _chat_via_chain
+        content_str = _chat_via_chain(system_prompt, user_prompt, model_name,
+                                      custom_api_key, tag="hook",
+                                      max_new_tokens=80)
+    except Exception as ex:
+        print(f"[hook_gen] provider chain note: {ex}")
 
-        if is_openai:
-            print("[hook_gen] Using direct OpenAI API key...")
-            try:
-                headers = {
-                    "Authorization": f"Bearer {custom_api_key}",
-                    "Content-Type": "application/json",
-                }
-                payload = {
-                    "model": "gpt-4o",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "max_tokens": 50,  # hooks are short — keep it tight
-                    "temperature": 0.9,
-                }
-                resp = requests.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=30,
-                )
-                resp.raise_for_status()
-                content_str = resp.json()["choices"][0]["message"]["content"]
-            except Exception as ex:
-                print(f"[hook_gen] Direct OpenAI failed: {ex}. Falling back...")
-
-        elif is_gemini:
-            print("[hook_gen] Using direct Google Gemini API key...")
-            try:
-                url = (
-                    f"https://generativelanguage.googleapis.com/v1beta/models/"
-                    f"gemini-2.5-flash:generateContent?key={custom_api_key}"
-                )
-                headers = {"Content-Type": "application/json"}
-                payload = {
-                    "contents": [
-                        {
-                            "role": "user",
-                            "parts": [
-                                {"text": f"{system_prompt}\n\nUser Request:\n{user_prompt}"}
-                            ],
-                        }
-                    ],
-                    "generationConfig": {"maxOutputTokens": 50, "temperature": 0.9},
-                }
-                resp = requests.post(url, headers=headers, json=payload, timeout=30)
-                resp.raise_for_status()
-                content_str = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-            except Exception as ex:
-                print(f"[hook_gen] Direct Gemini failed: {ex}. Falling back...")
-
-    # ------------------------------------------------------------------
-    # 2. Fall back to OpenRouter
-    # ------------------------------------------------------------------
-    if not content_str:
-        # Check if local Ollama can be used as a smart zero-key fallback
-        print("[hook_gen] Attempting local Ollama fallback before OpenRouter...")
-        content_str = _generate_ollama("Ollama (deepseek-r1)", system_prompt, user_prompt)
-
-    if not content_str:
-        print("[hook_gen] Routing via OpenRouter API...")
-        openrouter_model = MODEL_MAPPING.get(model_name, "google/gemini-2.5-flash")
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": openrouter_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "max_tokens": 50,
-            "temperature": 0.9,
-        }
-        try:
-            resp = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=45)
-            resp.raise_for_status()
-            content_str = resp.json()["choices"][0]["message"]["content"]
-        except Exception as ex:
-            print(f"[hook_gen] OpenRouter call failed: {ex}")
-
-    # ------------------------------------------------------------------
-    # 3. Validate LLM output
-    # ------------------------------------------------------------------
     if content_str:
         hook = _clean_hook_response(content_str)
         if _is_valid_hook(hook):
             print(f"[hook_gen] LLM hook accepted ({_count_words(hook)} words): '{hook}'")
-            return hook
-        else:
-            print(
-                f"[hook_gen] LLM hook rejected (failed rules): '{hook}'. "
-                "Switching to smart fallback."
-            )
+            return hook, "llm"
+        print(f"[hook_gen] LLM hook rejected (failed rules): '{hook}'. Trying scraper.")
 
     # ------------------------------------------------------------------
-    # 4. Smart fallback from viral_angle_data
+    # 2. Scraper — real viral titles for this topic, adapted into hooks.
+    # ------------------------------------------------------------------
+    try:
+        from src.backend.hook_scraper import best_scraped_hook
+        topic_hint = viral_angle_text or category
+        scraped, raw_title = best_scraped_hook(topic_hint, category)
+        if scraped:
+            return scraped, "scraper"
+    except Exception as ex:
+        print(f"[hook_gen] scraper note: {ex}")
+
+    # ------------------------------------------------------------------
+    # 3. Template fallback from viral_angle_data (never fails).
     # ------------------------------------------------------------------
     fallback = _generate_fallback_hook(viral_angle_data)
     print(f"[hook_gen] Fallback hook: '{fallback}'")
-    return fallback
+    return fallback, "template"
 
 
-# ---------------------------------------------------------------------------
 # Module-level test helpers
 # ---------------------------------------------------------------------------
 

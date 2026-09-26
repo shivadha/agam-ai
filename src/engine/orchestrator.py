@@ -8,6 +8,8 @@ import json
 from collections import defaultdict, deque
 from typing import Dict, Any, List
 
+from src.engine import node_fallbacks
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -26,12 +28,105 @@ class StateStore:
         return self.store
 
 class WorkflowEngine:
-    def __init__(self, workflow_json: dict, on_node_status=None):
+    def __init__(self, workflow_json: dict, on_node_status=None, run_id: str = None):
         self.workflow = workflow_json
         self.nodes = {node['id']: node for node in self.workflow.get('nodes', [])}
         self.edges = self.workflow.get('edges', [])
         self.state = StateStore()
         self.on_node_status = on_node_status
+        # ── Run persistence: every node result + log line lands in SQLite
+        #    (workflow_runs / node_results / node_logs) so a failed run can be
+        #    resumed from the failed node and the Errors tab has exact errors.
+        import uuid as _uuid
+        self.run_id = run_id or _uuid.uuid4().hex
+        self._db_ok = False
+        try:
+            from src import database as _db
+            _db.init_db()
+            _db.record_workflow_run(
+                self.run_id,
+                self.workflow.get('name') or (self.workflow.get('article') or {}).get('title') or '',
+            )
+            self._db = _db
+            self._db_ok = True
+        except Exception as _e:
+            print(f"[WorkflowEngine] run persistence unavailable: {_e}", flush=True)
+            self._db = None
+
+    # ── persistence helpers ──────────────────────────────────────────
+    def _log(self, node_id: str, level: str, message: str):
+        print(f"[WorkflowEngine][{level}] {node_id}: {message}", flush=True)
+        if self._db_ok:
+            try:
+                self._db.save_node_log(self.run_id, node_id, level, message)
+            except Exception:
+                pass
+
+    def _persist_node(self, node_id: str, node_type: str, inputs: dict, result: dict):
+        if not self._db_ok:
+            return
+        try:
+            status = result.get('status', 'success')
+            self._db.save_node_result(
+                self.run_id, node_id, node_type, status,
+                result_json=json.dumps(result, default=str),
+                inputs_json=json.dumps(inputs or {}, default=str),
+                error=result.get('error', '') or '',
+                recovered_via=result.get('recovered_via', '') or '',
+            )
+        except Exception as _e:
+            print(f"[WorkflowEngine] persist note ({node_id}): {_e}", flush=True)
+
+    def _load_prior_state(self) -> None:
+        """Seed state with the latest successful results of this run_id.
+
+        Used by resume-from-failure and single-node regenerate: upstream
+        nodes are NOT re-executed, their saved outputs are restored.
+        """
+        if not self._db_ok:
+            return
+        loaded = 0
+        for row in self._db.get_node_results(self.run_id):
+            if row.get('status') != 'success':
+                continue
+            try:
+                self.state.set(row['node_id'], json.loads(row.get('result_json') or '{}'))
+                loaded += 1
+            except Exception:
+                pass
+        print(f"[WorkflowEngine] Restored {loaded} prior node result(s) for run {self.run_id[:8]}.",
+              flush=True)
+
+    def first_failed_node(self) -> str | None:
+        """First node in topo order whose latest saved result is an error."""
+        if not self._db_ok:
+            return None
+        failed = {r['node_id'] for r in self._db.get_node_results(self.run_id)
+                  if r.get('status') == 'error'}
+        if not failed:
+            return None
+        for nid in self.topological_sort():
+            if nid in failed:
+                return nid
+        return None
+
+    def rerun_node(self, node_id: str, node_data_override: dict = None) -> dict:
+        """Re-execute ONE node (regenerate its output).
+
+        Prior successful results are restored; only this node runs again and
+        its new output is stored as the next attempt. Downstream nodes keep
+        their old outputs — resume from the next node afterwards if needed.
+        """
+        node = self.nodes.get(node_id)
+        if not node:
+            raise ValueError(f"unknown node {node_id}")
+        if node_data_override:
+            node = {**node, 'data': {**(node.get('data') or {}), **node_data_override}}
+            self.nodes[node_id] = node
+        self._load_prior_state()
+        self._log(node_id, 'info', 'Regenerating node (single-node re-run)...')
+        self.execute_node(node)
+        return self.state.get(node_id) or {}
 
     def topological_sort(self) -> List[str]:
         in_degree = {node_id: 0 for node_id in self.nodes}
@@ -60,20 +155,40 @@ class WorkflowEngine:
             
         return sorted_nodes
 
-    def run(self):
+    def run(self, resume_from_node: str = None):
+        """Execute the workflow in topological order.
+
+        resume_from_node: when set, prior successful node results for this
+        run_id are restored and execution starts AT that node instead of
+        from the beginning (resume-from-failure).
+        """
         sorted_node_ids = self.topological_sort()
-        
-        for node_id in sorted_node_ids:
+
+        start_idx = 0
+        if resume_from_node:
+            self._load_prior_state()
+            if resume_from_node in sorted_node_ids:
+                start_idx = sorted_node_ids.index(resume_from_node)
+                self._log(resume_from_node, 'info',
+                          f"Resuming run {self.run_id[:8]} from node "
+                          f"{resume_from_node} (skipping {start_idx} completed node(s)).")
+            else:
+                self._log(resume_from_node or '', 'warning',
+                          f"resume node {resume_from_node} not in workflow; starting from beginning.")
+
+        for node_id in sorted_node_ids[start_idx:]:
             node = self.nodes[node_id]
             if self.on_node_status:
                 try:
                     self.on_node_status(node_id, 'running', None)
                 except Exception as cb_err:
                     print(f"[WorkflowEngine] Callback error (start): {cb_err}")
-            
+            self._log(node_id, 'info',
+                      f"Executing node {node_id} ({node.get('type')})...")
+
             self.execute_node(node)
             res = self.state.get(node_id) or {}
-            
+
             if self.on_node_status:
                 try:
                     self.on_node_status(node_id, res.get('status', 'success'), res)
@@ -81,12 +196,36 @@ class WorkflowEngine:
                     print(f"[WorkflowEngine] Callback error (end): {cb_err}")
 
             # CRITICAL SAFETY HALT: If any core node failed, STOP execution immediately!
+            # (A node only reaches 'error' when its on_failure policy is "fail",
+            #  or when the "fallback" policy exhausted every alternative way.)
             if res.get('status') == 'error':
                 err_msg = res.get('error', 'Unknown error')
-                print(f"[WorkflowEngine] CRITICAL HALT: Node {node_id} ({node.get('type')}) failed: {err_msg}. Aborting remaining pipeline nodes.", flush=True)
+                policy = res.get('on_failure', 'fail')
+                self._log(node_id, 'error',
+                          f"Node {node_id} ({node.get('type')}) FAILED "
+                          f"(on_failure={policy}): {err_msg}")
+                print(f"[WorkflowEngine] CRITICAL HALT (on_failure={policy}): Node {node_id} ({node.get('type')}) failed: {err_msg}. Aborting remaining pipeline nodes.", flush=True)
                 break
-            
-        return self.state.get_all()
+            if res.get('recovered_via'):
+                self._log(node_id, 'warning',
+                          f"Node {node_id} recovered via '{res['recovered_via']}': "
+                          f"{res.get('recovery_note', '')}")
+
+        final = self.state.get_all()
+        if self._db_ok:
+            try:
+                has_errors = any(isinstance(v, dict) and v.get('status') == 'error'
+                                 for v in final.values())
+                ran_all = len(final) >= len(sorted_node_ids[start_idx:])
+                self._db.finish_workflow_run(
+                    self.run_id,
+                    'success' if (not has_errors and ran_all) else
+                    ('failed' if has_errors else 'partial'),
+                    next((v.get('error', '') for v in final.values()
+                          if isinstance(v, dict) and v.get('status') == 'error'), ''))
+            except Exception:
+                pass
+        return final
 
     def _find_in_state(self, key: str) -> Any:
         for node_res in self.state.get_all().values():
@@ -549,16 +688,25 @@ class WorkflowEngine:
 
             elif node_type == 'gen-hook':
                 from src.backend.hook_gen import generate_hook, generate_hook_visuals
-                viral_angle_data = self._find_in_state('viral_angle') or {}
-                if not viral_angle_data:
+                # _find_in_state('viral_angle') may return the raw angle STRING
+                # (extract-viral-angle stores it as a plain value, not a dict).
+                # Passing a string into generate_hook crashed with
+                # AttributeError: 'str' object has no attribute 'get' — the
+                # reason gen-hook "always failed". Normalize to a dict here.
+                _va = self._find_in_state('viral_angle')
+                if isinstance(_va, dict):
+                    viral_angle_data = _va
+                else:
                     viral_angle_data = {
                         'emotion': self._find_in_state('emotion') or 'curiosity',
                         'hook_type': self._find_in_state('hook_type') or 'curiosity_gap',
-                        'viral_angle': self._find_in_state('viral_angle') or 'AI is changing everything'
+                        'category': self._find_in_state('category') or 'AI',
+                        'viral_angle': _va if isinstance(_va, str) and _va.strip()
+                                       else 'AI is changing everything',
                     }
                 model_name = node_data.get('model', 'GPT-4o')
                 custom_api_key = node_data.get('api_key', '')
-                hook = generate_hook(viral_angle_data, model_name, custom_api_key)
+                hook, hook_source = generate_hook(viral_angle_data, model_name, custom_api_key)
                 # AI-generated visual prompts for the hook hero shot (image + motion)
                 topic = node_data.get('topic') or self._find_in_state('topic_title') or self._find_in_state('topic') or ''
                 visual_style = node_data.get('visual_style') or self._find_in_state('visual_style') or 'cinema_8k'
@@ -573,7 +721,8 @@ class WorkflowEngine:
                 except Exception as hv_err:
                     print(f"[Orchestrator] Hook visuals note: {hv_err}")
                     hook_visuals = {}
-                result = {'status': 'success', 'node_type': node_type, 'hook': hook, **hook_visuals}
+                result = {'status': 'success', 'node_type': node_type, 'hook': hook,
+                          'hook_source': hook_source, **hook_visuals}
 
             elif node_type == 'bg-music':
                 # Sound-library first: real downloaded tracks, kept fresh by
@@ -962,10 +1111,30 @@ class WorkflowEngine:
             import traceback
             traceback.print_exc()
             print(f"[WorkflowEngine] FAILED Node {node_id} ({node_type}): {e}", flush=True)
-            result = {
-                "status": "error",
-                "node_type": node_type,
-                "error": str(e)
-            }
+            # ── Node failure policy ──
+            # "fallback" (default): automatically try OTHER ways to fulfill
+            # the node (see src/engine/node_fallbacks.py). Only when every
+            # alternative fails does the node report an error.
+            # "fail": fail the whole cycle immediately (CRITICAL HALT below).
+            policy = node_fallbacks.resolve_policy(node_data, self.workflow)
+            fb_result = None
+            if policy == node_fallbacks.FALLBACK:
+                fb_result = node_fallbacks.attempt_fallbacks(
+                    self, node, node_type, node_data, inputs, e)
+            if fb_result is not None:
+                result = fb_result
+            else:
+                if policy == node_fallbacks.FALLBACK:
+                    print(f"[WorkflowEngine] Node {node_id}: all fallback strategies "
+                          f"failed — failing the cycle.", flush=True)
+                result = {
+                    "status": "error",
+                    "node_type": node_type,
+                    "error": str(e),
+                    "on_failure": policy,
+                }
             
         self.state.set(node_id, result)
+        # Persist every node execution (results + inputs) so runs can be
+        # resumed from the failed node and regenerated per-node later.
+        self._persist_node(node_id, node_type, inputs, result)

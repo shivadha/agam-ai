@@ -7,11 +7,13 @@ from .base import FreeWebProvider
 from .gemini import GeminiProvider
 from .veo import VeoProvider
 from .chatgpt import ChatGPTProvider
+from .hailuo import HailuoProvider
 
 _REGISTRY: dict[str, type[FreeWebProvider]] = {
     "gemini_web": GeminiProvider,
     "veo_web": VeoProvider,
     "chatgpt_go": ChatGPTProvider,
+    "hailuo_web": HailuoProvider,
 }
 
 

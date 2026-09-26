@@ -133,7 +133,8 @@ def init_db():
                 created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 started_at    TIMESTAMP,
-                finished_at   TIMESTAMP
+                finished_at   TIMESTAMP,
+                strategy      TEXT DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_agent_jobs_status ON agent_jobs(status, created_at);
             CREATE INDEX IF NOT EXISTS idx_free_providers_status ON free_providers(status, enabled, priority);
@@ -156,6 +157,43 @@ def init_db():
                 UNIQUE(scope, kind, norm)
             );
             CREATE INDEX IF NOT EXISTS idx_agent_memory_scope ON agent_memory(scope, kind, confidence);
+
+            -- Workflow run persistence ---------------------------------------
+            -- workflow_runs: one row per pipeline execution.
+            -- node_results: every node execution (incl. retries/regenerations).
+            -- node_logs: console log lines per run/node — powers the Errors tab.
+            CREATE TABLE IF NOT EXISTS workflow_runs (
+                run_id      TEXT PRIMARY KEY,
+                name        TEXT,
+                status      TEXT NOT NULL DEFAULT 'running',
+                error       TEXT,
+                started_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS node_results (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id      TEXT NOT NULL,
+                node_id     TEXT NOT NULL,
+                node_type   TEXT,
+                status      TEXT,
+                result_json TEXT,
+                inputs_json TEXT,
+                error       TEXT,
+                recovered_via TEXT,
+                attempt     INTEGER NOT NULL DEFAULT 1,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(run_id, node_id, attempt)
+            );
+            CREATE INDEX IF NOT EXISTS idx_node_results_run ON node_results(run_id, node_id);
+            CREATE TABLE IF NOT EXISTS node_logs (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id      TEXT NOT NULL,
+                node_id     TEXT,
+                level       TEXT NOT NULL DEFAULT 'info',
+                message     TEXT,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_node_logs_run ON node_logs(run_id, created_at);
         ''')
 
         # Auto-migration: ensure image_url exists on legacy tables
@@ -165,6 +203,16 @@ def init_db():
             try:
                 c.execute("ALTER TABLE articles ADD COLUMN image_url TEXT")
                 print("[DB] Added 'image_url' column to articles table.")
+            except Exception as e:
+                print(f"[DB] Migration note: {e}")
+
+        # Auto-migration: strategy column on agent_jobs (which path the rotator took)
+        try:
+            c.execute("SELECT strategy FROM agent_jobs LIMIT 1")
+        except sqlite3.OperationalError:
+            try:
+                c.execute("ALTER TABLE agent_jobs ADD COLUMN strategy TEXT DEFAULT ''")
+                print("[DB] Added 'strategy' column to agent_jobs table.")
             except Exception as e:
                 print(f"[DB] Migration note: {e}")
 
@@ -427,3 +475,139 @@ def get_youtube_credentials(user_id: int) -> str:
         conn.close()
     return row['credentials'] if row else None
 
+
+# ── Workflow run persistence (resume-from-failure + Errors tab) ────────────
+def record_workflow_run(run_id: str, name: str = "") -> None:
+    with _db_lock:
+        conn = get_db()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO workflow_runs (run_id, name, status) VALUES (?, ?, 'running')",
+                (run_id, name or ""),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def finish_workflow_run(run_id: str, status: str, error: str = "") -> None:
+    with _db_lock:
+        conn = get_db()
+        try:
+            conn.execute(
+                "UPDATE workflow_runs SET status = ?, error = ?, finished_at = CURRENT_TIMESTAMP WHERE run_id = ?",
+                (status, error or "", run_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def save_node_result(run_id: str, node_id: str, node_type: str, status: str,
+                     result_json: str = "", inputs_json: str = "",
+                     error: str = "", recovered_via: str = "") -> int:
+    """Insert a node execution row; returns the attempt number."""
+    with _db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(attempt), 0) FROM node_results WHERE run_id = ? AND node_id = ?",
+                (run_id, node_id),
+            ).fetchone()
+            attempt = int(row[0] or 0) + 1
+            conn.execute(
+                """INSERT INTO node_results
+                   (run_id, node_id, node_type, status, result_json, inputs_json,
+                    error, recovered_via, attempt)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (run_id, node_id, node_type, status, result_json, inputs_json,
+                 error or "", recovered_via or "", attempt),
+            )
+            conn.commit()
+            return attempt
+        finally:
+            conn.close()
+
+
+def save_node_log(run_id: str, node_id: str, level: str, message: str) -> None:
+    with _db_lock:
+        conn = get_db()
+        try:
+            conn.execute(
+                "INSERT INTO node_logs (run_id, node_id, level, message) VALUES (?, ?, ?, ?)",
+                (run_id, node_id, level, (message or "")[:4000]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_node_results(run_id: str) -> list:
+    """Latest attempt per node for a run (dicts)."""
+    with _db_lock:
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                """SELECT node_id, node_type, status, result_json, inputs_json,
+                          error, recovered_via, attempt, created_at
+                   FROM node_results
+                   WHERE run_id = ?
+                     AND id IN (SELECT MAX(id) FROM node_results
+                                WHERE run_id = ? GROUP BY node_id)
+                   ORDER BY id""",
+                (run_id, run_id),
+            ).fetchall()
+        finally:
+            conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_node_result_history(run_id: str, node_id: str) -> list:
+    with _db_lock:
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                """SELECT attempt, status, result_json, inputs_json, error,
+                          recovered_via, created_at
+                   FROM node_results WHERE run_id = ? AND node_id = ?
+                   ORDER BY attempt""",
+                (run_id, node_id),
+            ).fetchall()
+        finally:
+            conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_node_logs(run_id: str, level: str = None, limit: int = 500) -> list:
+    with _db_lock:
+        conn = get_db()
+        try:
+            if level:
+                rows = conn.execute(
+                    "SELECT node_id, level, message, created_at FROM node_logs"
+                    " WHERE run_id = ? AND level = ? ORDER BY id DESC LIMIT ?",
+                    (run_id, level, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT node_id, level, message, created_at FROM node_logs"
+                    " WHERE run_id = ? ORDER BY id DESC LIMIT ?",
+                    (run_id, limit),
+                ).fetchall()
+        finally:
+            conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_workflow_runs(limit: int = 30) -> list:
+    with _db_lock:
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT run_id, name, status, error, started_at, finished_at"
+                " FROM workflow_runs ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        finally:
+            conn.close()
+    return [dict(r) for r in rows]

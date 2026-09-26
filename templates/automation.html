@@ -402,8 +402,11 @@
                         <div class="ch-dot" id="chDot"></div>
                         <span class="ch-title">Execution Console</span>
                         <span class="ch-count" id="chCount">0 entries</span>
+                        <button class="ch-tab ch-tab-active" id="tabLogs" onclick="window.switchConsoleTab('logs')">📋 Logs</button>
+                        <button class="ch-tab" id="tabErrors" onclick="window.switchConsoleTab('errors')">🚨 Errors <span id="errCount" class="ch-err-count hidden"></span></button>
                     </div>
                     <div class="ch-right">
+                        <button class="ch-btn" id="btnResumeRun" onclick="window.resumeWorkflowRun()" title="Resume from the failed node — keeps all successful results">▶ Resume</button>
                         <button class="ch-btn" id="btnClearLog">Clear</button>
                         <button class="ch-btn" id="btnCollapseConsole">▼</button>
                     </div>
@@ -411,6 +414,11 @@
                 <div class="console-body" id="consoleBody">
                     <div class="console-empty-msg">
                         <span>// Run a workflow to see execution logs here</span>
+                    </div>
+                </div>
+                <div class="console-body hidden" id="errorsBody">
+                    <div class="console-empty-msg">
+                        <span>// No errors recorded — exact node failures will appear here</span>
                     </div>
                 </div>
             </div>

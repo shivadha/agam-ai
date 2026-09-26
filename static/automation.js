@@ -164,7 +164,7 @@ const NODE_CONFIGS = {
         { key:'custom_text', label:'Custom Text',     type:'text', placeholder:'Leave blank to use hook/title', def:'' },
     ],
     'img-to-video': [
-        { key:'provider', label:'AI Video Provider', type:'select', opts:['ComfyUI (Local Wan 2.1 / LTX) [Free GPU]','HuggingFace SVD [Free Cloud]','MiniMax-H3 (Free/Cloud)','fal.ai','Kling','Luma','Runway'], def:'ComfyUI (Local Wan 2.1 / LTX) [Free GPU]' },
+        { key:'provider', label:'AI Video Provider', type:'select', opts:['ComfyUI (Local Wan 2.1 / LTX) [Free GPU]','MiniMax-H3 (HF Space) [Free, No Key]','HuggingFace SVD [Free Cloud]','MiniMax-H3 (Free/Cloud)','fal.ai','Kling','Luma','Runway'], def:'ComfyUI (Local Wan 2.1 / LTX) [Free GPU]' },
         { key:'api_key',  label:'API Key (Optional)', type:'text', placeholder:'Leave blank for local/free mode', def:'' },
         { key:'motion',   label:'Motion Scale',  type:'select', opts:['Low','Medium','High'], def:'Medium' },
         { key:'ratio',    label:'Aspect Ratio',  type:'select', opts:['9:16 (Shorts)','16:9 (YouTube)'], def:'9:16 (Shorts)' },
@@ -237,6 +237,26 @@ const NODE_CONFIGS = {
         { key:'privacy',    label:'Privacy', type:'select', opts:['private','unlisted','public'], def:'private' },
     ],
 };
+
+// ──────────────────────────────────────────────────────────────
+// 🛟 ON-FAILURE POLICY — every node gets an "On Failure" setting.
+// "Try other ways (fallback)" (default): a failed node automatically
+// tries other ways to fulfill itself (other providers, graceful skips);
+// the cycle only halts when every alternative fails.
+// "Fail whole cycle": a node failure aborts the entire run immediately.
+// Backend: src/engine/node_fallbacks.py — the backend reads the label
+// directly ("Fail whole cycle" -> fail, anything else -> fallback).
+// ──────────────────────────────────────────────────────────────
+(function(){
+    const SKIP = new Set(['manual-trigger','schedule-trigger','article-trigger']);
+    const FIELD = { key:'on_failure', label:'On Failure 🛟', type:'select',
+        opts:['Try other ways (fallback)','Fail whole cycle'],
+        def:'Try other ways (fallback)' };
+    for (const [type, fields] of Object.entries(NODE_CONFIGS)) {
+        if (SKIP.has(type) || !Array.isArray(fields)) continue;
+        if (!fields.some(f => f.key === 'on_failure')) fields.push({...FIELD});
+    }
+})();
 
 // ──────────────────────────────────────────────────────────────
 // 💰 FREE MODE — one-click zero-cost provider presets per node type.
@@ -315,6 +335,9 @@ const APP = {
     nextId:     1,
     freeMode:   false,   // 💰 when on, nodes use zero-cost providers (see FREE_MODE_PRESETS)
     consoleCollapsed: false,
+    consoleTab: 'logs',  // 'logs' | 'errors'
+    lastRunId:  null,    // most recent workflow run id (for Errors tab / resume / regenerate)
+    lastPayload: null,   // workflow JSON of the most recent run (for resume)
     undoStack:  [],
 };
 
@@ -376,10 +399,15 @@ function cacheDOM() {
         propsContent:   g('propsContent'),
         // Console
         consoleBody:    g('consoleBody'),
+        errorsBody:     g('errorsBody'),
         chCount:        g('chCount'),
         chDot:          g('chDot'),
         btnClearLog:    g('btnClearLog'),
         btnCollapseConsole: g('btnCollapseConsole'),
+        btnResumeRun:   g('btnResumeRun'),
+        tabLogs:        g('tabLogs'),
+        tabErrors:      g('tabErrors'),
+        errCount:       g('errCount'),
         execConsole:    g('execConsole'),
         // Context menu
         ctxMenu:        g('ctxMenu'),
@@ -986,6 +1014,9 @@ function showPropsContent(nodeId) {
             <button class="pc-btn-preview-node" id="pc-preview-btn-${nodeId}" onclick="previewSingleNode('${nodeId}')" style="width:100%;margin-top:6px;padding:8px 12px;background:linear-gradient(135deg,rgba(139,92,246,0.12),rgba(59,130,246,0.12));border:1px solid rgba(139,92,246,0.4);border-radius:7px;color:#a78bfa;font-size:0.76rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;transition:all 0.2s;">
                 <span>▶</span> Preview This Node Only
             </button>
+            <button class="pc-btn-regen-node" id="pc-regen-btn-${nodeId}" onclick="window.regenerateNode('${nodeId}')" title="Re-run just this node inside the last workflow run (upstream results restored)" style="width:100%;margin-top:6px;padding:8px 12px;background:linear-gradient(135deg,rgba(245,158,11,0.12),rgba(239,68,68,0.12));border:1px solid rgba(245,158,11,0.4);border-radius:7px;color:#fbbf24;font-size:0.76rem;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;transition:all 0.2s;">
+                <span>🔁</span> Regenerate This Node
+            </button>
             <div id="pc-preview-result-${nodeId}" style="margin-top:6px;display:none;"></div>
         </div>
         ${resultSection}
@@ -1438,10 +1469,13 @@ async function runWorkflow() {
         }
 
         const runId = startData.run_id;
+        APP.lastRunId = runId;
+        APP.lastPayload = payload;
         try {
             localStorage.setItem('pf_active_run_id', runId);
             localStorage.setItem('pf_active_run_start', String(startMs));
             localStorage.setItem('pf_active_run_order', JSON.stringify(order));
+            localStorage.setItem('pf_last_payload', JSON.stringify(payload));
         } catch(e) {}
 
         logAdd(`✓ Pipeline running in background (Run ID: ${runId.slice(0,8)}). Polling active...`, 'success');
@@ -1659,6 +1693,17 @@ function pollWorkflowExecution(runId, order = null, total = null, startMs = null
                     showToast('Workflow pipeline failed!', 'error');
                 }
 
+                // Pull exact per-node errors into the Errors tab, and offer
+                // resume-from-failed-node when the run didn't fully succeed.
+                loadRunErrors(runId);
+                if (runState.status !== 'success') {
+                    logAdd(`<div style="margin:8px 0;padding:10px 14px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.4);border-radius:8px;">
+                        <div style="font-weight:700;color:#fbbf24;font-size:0.82rem;margin-bottom:6px;">⏸ Workflow stopped — successful results are saved.</div>
+                        <div style="font-size:0.74rem;color:#94a3b8;margin-bottom:8px;">Resume continues <b>from the failed node</b> (not from the beginning). Fix the node's settings first if needed, or check the 🚨 Errors tab for the exact reason.</div>
+                        <button onclick="window.resumeWorkflowRun('${runId}')" style="padding:6px 16px;background:linear-gradient(135deg,#f59e0b,#ef4444);border:none;border-radius:6px;color:#000;font-size:0.78rem;font-weight:700;cursor:pointer;">▶ Resume from failed node</button>
+                    </div>`, 'warning');
+                }
+
                 // Release UI locks
                 APP.execRunning = false;
                 D.canvasLockBanner?.classList.add('hidden');
@@ -1679,6 +1724,12 @@ async function resumeActiveWorkflowIfRunning() {
     let runId = null;
     try { runId = localStorage.getItem('pf_active_run_id'); } catch(e){}
     if (!runId) return;
+
+    APP.lastRunId = runId;
+    try {
+        const rawPayload = localStorage.getItem('pf_last_payload');
+        if (rawPayload) APP.lastPayload = JSON.parse(rawPayload);
+    } catch(e){}
 
     try {
         const res = await fetch(`/api/workflow/status/${runId}`);
@@ -1795,6 +1846,105 @@ function logClear() {
     D.consoleBody.innerHTML = '<div class="console-empty-msg"><span>// Console cleared</span></div>';
     D.chCount.textContent = '0 entries';
 }
+
+// ──────────────────────────────────────────────────────────────
+// 10b. ERRORS TAB + RESUME-FROM-FAILURE + PER-NODE REGENERATE
+// ──────────────────────────────────────────────────────────────
+window.switchConsoleTab = function(which) {
+    APP.consoleTab = which;
+    const isErr = which === 'errors';
+    D.consoleBody.classList.toggle('hidden', isErr);
+    D.errorsBody.classList.toggle('hidden', !isErr);
+    D.tabLogs.classList.toggle('ch-tab-active', !isErr);
+    D.tabErrors.classList.toggle('ch-tab-active', isErr);
+    if (isErr && APP.lastRunId) loadRunErrors(APP.lastRunId);
+};
+
+async function loadRunErrors(runId) {
+    try {
+        const res = await fetch(`/api/workflow/runs/${runId}/errors`, { credentials: 'include' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const errs = data.errors || [];
+        if (errs.length) {
+            D.errCount.textContent = errs.length;
+            D.errCount.classList.remove('hidden');
+        } else {
+            D.errCount.classList.add('hidden');
+        }
+        D.errorsBody.innerHTML = errs.length
+            ? errs.map(e => `
+                <div class="err-entry">
+                    <span class="err-node">${escHtml(e.node_id || 'run')}</span><span class="err-time">[${escHtml((e.created_at || '').slice(11, 19))}]</span><span class="err-msg">${escHtml(e.message || '')}</span>
+                </div>`).join('')
+            : '<div class="console-empty-msg"><span>// No errors recorded — exact node failures will appear here</span></div>';
+        D.errorsBody.scrollTop = 0;
+    } catch (e) { console.error('[loadRunErrors]', e); }
+}
+
+function escHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Resume a failed run FROM the failed node — successful results are kept.
+window.resumeWorkflowRun = async function(runId) {
+    runId = runId || APP.lastRunId || (() => { try { return localStorage.getItem('pf_active_run_id'); } catch(e){ return null; } })();
+    if (!runId) { showToast('No run to resume yet — run a workflow first.', 'warning'); return; }
+    let payload = APP.lastPayload;
+    if (!payload) { try { payload = JSON.parse(localStorage.getItem('pf_last_payload') || 'null'); } catch(e){} }
+    if (!payload || !payload.nodes) { showToast('No saved workflow payload for this run.', 'error'); return; }
+    if (APP.execRunning) { showToast('A workflow is already running.', 'warning'); return; }
+    showToast('▶ Resuming from the failed node — completed results are kept…', 'info');
+    logAdd(`▶ Resuming run ${runId.slice(0, 8)} from the failed node…`, 'process');
+    try {
+        const res = await fetch(`/api/workflow/resume/${runId}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            credentials: 'include', body: JSON.stringify({ payload })
+        });
+        const data = await res.json();
+        if (data.status !== 'started') throw new Error(data.message || 'Resume rejected');
+        APP.lastRunId = runId; APP.lastPayload = payload;
+        APP.execRunning = true;
+        D.chDot.classList.add('running');
+        pollWorkflowExecution(runId, null, null, Date.now());
+    } catch (e) {
+        console.error('[resumeWorkflowRun]', e);
+        logAdd(`✗ Resume failed: ${e.message}`, 'error');
+        showToast(`Resume failed: ${e.message}`, 'error');
+    }
+};
+
+// Regenerate ONE node's output inside the last run (upstream results restored).
+window.regenerateNode = async function(nodeId) {
+    const runId = APP.lastRunId;
+    if (!runId) { showToast('Run a workflow first — nothing to regenerate yet.', 'warning'); return; }
+    const node = APP.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+    showToast(`🔁 Regenerating ${nodeId}…`, 'info');
+    logAdd(`🔁 Regenerating node ${nodeId} (${node.type})…`, 'process');
+    try {
+        const res = await fetch('/api/workflow/rerun-node', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ run_id: runId, node_id: nodeId,
+                                   node: { data: node.data || {} },
+                                   payload: APP.lastPayload })
+        });
+        const data = await res.json();
+        if (data.status !== 'ok') throw new Error(data.message || 'Regenerate failed');
+        node.result = data.result;
+        node.status = data.result.status === 'error' ? 'failed' : 'success';
+        updateNodeEl(nodeId);
+        logAdd(`✓ Node ${nodeId} regenerated: ${node.status}`, node.status === 'success' ? 'success' : 'error');
+        showToast(`Node ${nodeId} regenerated.`, node.status === 'success' ? 'success' : 'warning');
+        if (APP.consoleTab === 'errors' || node.status !== 'success') loadRunErrors(runId);
+        renderProps(nodeId); // refresh the props panel with the new result
+    } catch (e) {
+        console.error('[regenerateNode]', e);
+        logAdd(`✗ Regenerate failed for ${nodeId}: ${e.message}`, 'error');
+        showToast(`Regenerate failed: ${e.message}`, 'error');
+    }
+};
 
 // ──────────────────────────────────────────────────────────────
 // 11. MINI-MAP

@@ -58,6 +58,13 @@ def _first(page, candidates):
     return None
 
 
+_CHATGPT_ERROR_MARKERS = (
+    "something went wrong", "try again", "error generating",
+    "unable to load", "network error", "rate limit", "too many requests",
+    "try again later",
+)
+
+
 class ChatGPTProvider(FreeWebProvider):
     id = "chatgpt_go"
     display_name = "ChatGPT Go (web)"
@@ -111,9 +118,18 @@ class ChatGPTProvider(FreeWebProvider):
         if not turns:
             raise ProviderError("no assistant reply found")
         try:
-            return turns[-1].inner_text(timeout=15000).strip()
+            text = turns[-1].inner_text(timeout=15000).strip()
         except Exception as e:
             raise ProviderError(f"could not read assistant reply: {e}")
+        # An error banner ("Something went wrong") is not a result — the
+        # orchestrator would otherwise happily use it as the video script.
+        low = text.lower()
+        if any(m in low for m in _CHATGPT_ERROR_MARKERS):
+            raise ProviderError(
+                f"chatgpt showed an error instead of a reply: {text[:120]}")
+        if not text:
+            raise ProviderError("chatgpt returned an empty reply")
+        return text
 
     def generate(self, page, job: dict, out_dir: str) -> dict:
         kind = job.get("kind", "text")
