@@ -1653,6 +1653,34 @@ def api_get_audio_stats():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@app.route('/api/audio-library/trending')
+@login_required
+def api_get_trending_sounds():
+    """Top trending meme/SFX/music sounds by viral score (downloaded only)."""
+    try:
+        from src.backend.audio_agent.library import AudioLibrary
+        lib = AudioLibrary()
+        category = request.args.get('category', 'meme')
+        limit = request.args.get('limit', 12, type=int)
+        data = lib.browse(category=category, downloaded_only=True,
+                          per_page=max(1, min(limit, 50)))
+        sounds = data.get("sounds", [])
+        return jsonify({"status": "success", "category": category,
+                        "total": data.get("total", 0), "sounds": [
+                            {"id": s.get("id"), "name": s.get("name"),
+                             "filename": s.get("filename"),
+                             "source": s.get("source"),
+                             "emotion": s.get("emotion"),
+                             "energy_level": s.get("energy_level"),
+                             "viral_score": s.get("viral_score"),
+                             "use_count": s.get("use_count"),
+                             "has_local_file": bool(s.get("local_path"))}
+                            for s in sounds
+                        ]})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route('/api/audio-library/sync', methods=['POST'])
 @login_required
 def api_sync_audio_library():
