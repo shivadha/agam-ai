@@ -43,6 +43,30 @@ def _have(cmd):
     return shutil.which(cmd) is not None
 
 
+def _ffmpeg():
+    """Resolved ffmpeg binary — system PATH first, else auto-installed bundle."""
+    p = shutil.which("ffmpeg")
+    if p:
+        return p
+    try:
+        from src.backend.auto_bootstrap import ffmpeg_bin
+        return ffmpeg_bin()
+    except Exception:
+        return None
+
+
+def _ffprobe():
+    """Resolved ffprobe binary, or None when unavailable (callers fall back)."""
+    p = shutil.which("ffprobe")
+    if p:
+        return p
+    try:
+        from src.backend.auto_bootstrap import ffprobe_bin
+        return ffprobe_bin()
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # 1. download
 # ---------------------------------------------------------------------------
@@ -52,9 +76,18 @@ def download_reference(url, work_dir):
     try:
         import yt_dlp  # noqa
     except ImportError:
-        raise RuntimeError(
-            "yt-dlp is not installed. Install it with: pip install yt-dlp "
-            "(or re-run setup_agent.bat)")
+        # Last-resort self-heal: try installing right here (the run gate
+        # normally handles this via auto_bootstrap before we get here).
+        try:
+            from src.backend.auto_bootstrap import ensure_pip
+            ok, msg, _ = ensure_pip("yt_dlp", "yt-dlp")
+            if not ok:
+                raise RuntimeError(msg)
+            import yt_dlp  # noqa
+        except ImportError:
+            raise RuntimeError(
+                "yt-dlp is not installed. Install it with: pip install yt-dlp "
+                "(or re-run setup_agent.bat)")
     os.makedirs(work_dir, exist_ok=True)
     out_tpl = os.path.join(work_dir, "reference.%(ext)s")
     cmd = [sys.executable, "-m", "yt_dlp",
@@ -85,25 +118,38 @@ def download_reference(url, work_dir):
 # ---------------------------------------------------------------------------
 
 def probe(path):
-    """Return (duration_s, fps, width, height) via ffprobe."""
-    if not _have("ffprobe"):
-        raise RuntimeError("ffprobe not found — install ffmpeg (the pipeline already requires it).")
-    r = _run(["ffprobe", "-v", "quiet", "-print_format", "json",
-              "-show_format", "-show_streams", path])
-    try:
-        info = json.loads(r.stdout)
-    except Exception:
-        raise RuntimeError("ffprobe could not read the reference video.")
-    duration = float(info["format"].get("duration") or 0)
-    vstream = next((s for s in info.get("streams", [])
-                    if s.get("codec_type") == "video"), {})
-    fps_s = vstream.get("avg_frame_rate") or vstream.get("r_frame_rate") or "30/1"
-    try:
-        num, den = fps_s.split("/")
-        fps = float(num) / float(den or 1)
-    except Exception:
-        fps = 30.0
-    return duration, fps, int(vstream.get("width") or 0), int(vstream.get("height") or 0)
+    """Return (duration_s, fps, width, height) via ffprobe, or ffmpeg -i fallback."""
+    fp = _ffprobe()
+    if fp:
+        r = _run([fp, "-v", "quiet", "-print_format", "json",
+                  "-show_format", "-show_streams", path])
+        try:
+            info = json.loads(r.stdout)
+        except Exception:
+            raise RuntimeError("ffprobe could not read the reference video.")
+        duration = float(info["format"].get("duration") or 0)
+        vstream = next((s for s in info.get("streams", [])
+                        if s.get("codec_type") == "video"), {})
+        fps_s = vstream.get("avg_frame_rate") or vstream.get("r_frame_rate") or "30/1"
+        try:
+            num, den = fps_s.split("/")
+            fps = float(num) / float(den or 1)
+        except Exception:
+            fps = 30.0
+        return duration, fps, int(vstream.get("width") or 0), int(vstream.get("height") or 0)
+    # No ffprobe (e.g. imageio-ffmpeg bundle): parse `ffmpeg -i` stderr.
+    ff = _ffmpeg()
+    if not ff:
+        raise RuntimeError("no ffmpeg/ffprobe found — auto-install failed; install ffmpeg manually.")
+    r = _run([ff, "-hide_banner", "-i", path], timeout=60)
+    log = r.stderr or ""
+    m = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", log)
+    duration = float(m.group(1)) * 3600 + float(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
+    m = re.search(r"Video:.*?\s(\d+)x(\d+)[,\s]", log)
+    w, h = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*fps", log)
+    fps = float(m.group(1)) if m else 30.0
+    return duration, fps, w, h
 
 
 # ---------------------------------------------------------------------------
@@ -117,10 +163,11 @@ def detect_shots(path, duration, threshold=0.35, min_shot=0.4):
     detection yields nothing usable.
     """
     cuts = []
-    if _have("ffmpeg"):
+    if _ffmpeg():
         # select frames where a scene change scores above threshold
         vf = f"select='gt(scene\\,{threshold})',showinfo"
-        r = _run(["ffmpeg", "-hide_banner", "-i", path, "-vf", vf,
+        ff = _ffmpeg()
+        r = _run([ff, "-hide_banner", "-i", path, "-vf", vf,
                   "-vsync", "0", "-f", "null", "-"], timeout=300)
         log = r.stderr or ""
         for m in re.finditer(r"pts_time:([0-9.]+)", log):
@@ -154,7 +201,8 @@ def _grab_frame(path, t, width=192):
     """Extract one frame at t seconds as a PIL grayscale thumbnail."""
     from PIL import Image
     tmp = os.path.join(os.path.dirname(path) or ".", "_rc_frame.png")
-    r = _run(["ffmpeg", "-hide_banner", "-loglevel", "error",
+    ff = _ffmpeg()
+    r = _run([ff, "-hide_banner", "-loglevel", "error",
               "-ss", str(max(0, t)), "-i", path,
               "-frames:v", "1", "-vf", f"scale={width}:-1", tmp])
     if r.returncode != 0 or not os.path.exists(tmp):
@@ -177,7 +225,8 @@ def extract_keyframes(path, shots, out_dir, thumb_w=320):
     for i, (a, b) in enumerate(shots):
         mid = (a + b) / 2.0
         tmp = os.path.join(out_dir, f"keyframe_{i:02d}.jpg")
-        r = _run(["ffmpeg", "-hide_banner", "-loglevel", "error",
+        ff = _ffmpeg()
+        r = _run([ff, "-hide_banner", "-loglevel", "error",
                   "-ss", str(mid), "-i", path, "-frames:v", "1",
                   "-vf", f"scale={thumb_w}:-1", "-q:v", "4", tmp])
         if r.returncode == 0 and os.path.exists(tmp):

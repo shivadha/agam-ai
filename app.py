@@ -322,6 +322,16 @@ def run_workflow():
     if not payload:
         return jsonify({"error": "No JSON payload provided."}), 400
 
+    # ── Auto-bootstrap: fix everything fixable (pip packages, ffmpeg,
+    #    background agent) so the user never has to remember setup steps.
+    #    Only genuinely user-needed items (API keys, logins) can still block.
+    boot = {"fixed": [], "failed": []}
+    if not payload.get("skip_preflight"):
+        from src.backend.auto_bootstrap import bootstrap_workflow, bootstrap_report_text
+        boot = bootstrap_workflow(payload)
+        if boot["fixed"] or boot["failed"]:
+            print("[auto-bootstrap]\n" + bootstrap_report_text(boot), flush=True)
+
     # ── Pre-flight gate: refuse to start when a required node has no live connection.
     #    Pass {"skip_preflight": true} to override (not recommended).
     if not payload.get("skip_preflight"):
@@ -334,6 +344,8 @@ def run_workflow():
                            "Test each failing node, add the missing API key / start the local service, then run again.",
                 "failed": check["failed"],
                 "nodes": check["nodes"],
+                "auto_fixed": boot["fixed"],
+                "auto_setup_failed": boot["failed"] + check["failed"],
             }), 400
 
     try:
@@ -342,6 +354,11 @@ def run_workflow():
         topic = (payload.get('article') or {}).get('title') or payload.get('name') or 'YouTube Content Pipeline'
         
         with _runs_lock:
+            boot_log = ["Initializing workflow pipeline..."]
+            for f in boot["fixed"]:
+                boot_log.append(f"Auto-setup: {f}")
+            for f in boot["failed"]:
+                boot_log.append(f"Auto-setup could not fix: {f} — continuing anyway")
             _workflow_runs[run_id] = {
                 'run_id': run_id,
                 'status': 'running',
@@ -349,7 +366,7 @@ def run_workflow():
                 'payload': payload,
                 'nodes': {},
                 'results': {},
-                'logs': ["Initializing workflow pipeline..."],
+                'logs': boot_log,
                 'created_at': datetime.datetime.utcnow().isoformat()
             }
             
@@ -374,6 +391,11 @@ def retry_workflow(run_id):
             return jsonify({"status": "error", "message": "No payload stored for this run"}), 400
 
     # Same pre-flight gate as /api/workflow/run — retries must not bypass it.
+    boot = {"fixed": [], "failed": []}
+    if not (request.get_json() or {}).get("skip_preflight"):
+        from src.backend.auto_bootstrap import bootstrap_workflow
+        boot = bootstrap_workflow(payload)
+
     if not (request.get_json() or {}).get("skip_preflight"):
         from src.backend.connection_tests import preflight_workflow
         check = preflight_workflow(payload)
@@ -382,6 +404,8 @@ def retry_workflow(run_id):
                 "status": "blocked",
                 "message": "Retry blocked: one or more nodes have no live connection.",
                 "failed": check["failed"],
+                "auto_fixed": boot["fixed"],
+                "auto_setup_failed": boot["failed"] + check["failed"],
             }), 400
 
     import uuid
@@ -821,6 +845,24 @@ def api_clips_status(job_id):
     return jsonify({"status": "success", "job": job})
 
 
+# ── System self-check: ensure everything a workflow needs is installed/running ──
+@app.route('/api/system/bootstrap', methods=['GET'])
+@login_required
+def api_system_bootstrap():
+    """Run the auto-bootstrap standalone (same thing that runs before every workflow)."""
+    from src.backend.auto_bootstrap import bootstrap_workflow, ensure_ffmpeg
+    from src.backend.free_agent_client import agent_alive
+    report = bootstrap_workflow({"nodes": []})  # ffmpeg check only, no node deps
+    ff_ok, ff_msg, _ = ensure_ffmpeg()
+    return jsonify({
+        "status": "ok",
+        "ffmpeg": {"ok": ff_ok, "message": ff_msg},
+        "agent": {"alive": agent_alive()},
+        "auto_fixed": report["fixed"],
+        "auto_setup_failed": report["failed"],
+    })
+
+
 # ── Reference-clone: analyze a YouTube Short's shot plan ───────────────────
 _clone_jobs = {}
 _clone_lock = threading.Lock()
@@ -842,6 +884,8 @@ def api_clone_analyze():
 
     def _run():
         try:
+            from src.backend.auto_bootstrap import bootstrap_workflow
+            bootstrap_workflow({"nodes": [{"type": "clone-short"}]})
             from src.backend.reference_clone import analyze_reference
             plan = analyze_reference(url, work_dir)
             with _clone_lock:
@@ -1156,6 +1200,11 @@ def run_single_node():
     node.setdefault('id', 'preview-node')
 
     try:
+        # Auto-bootstrap single-node previews too (install missing deps, start agent).
+        if not data.get("skip_preflight"):
+            from src.backend.auto_bootstrap import bootstrap_workflow
+            bootstrap_workflow({"nodes": [node]})
+
         from src.engine.orchestrator import WorkflowEngine
         engine = WorkflowEngine({"nodes": [node], "edges": []})
 
