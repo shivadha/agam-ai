@@ -98,7 +98,7 @@ def test_prepare_video_shot_accepts_fallback_image():
 
 def test_dead_videos_dropped_before_black():
     src = inspect.getsource(video_assembler.assemble_cinematic_video)
-    assert "dropped" in src and "dead" in src
+    assert "_regenerate_dead_video" in src
     assert "falling back to images" in src
     # failure path inside prepare_video_shot prefers the scene image
     psrc = inspect.getsource(video_assembler.prepare_video_shot)
@@ -147,3 +147,61 @@ def test_orchestrator_tts_defaults_to_indian_voice():
     src = inspect.getsource(orch_mod.WorkflowEngine.execute_node)
     assert "node_data.get('voice', 'en-IN-PrabhatNeural')" in src
     assert "en-US-ChristopherNeural" not in src
+
+
+# ── Regenerate dead videos with fresh title-context motion script ────────────
+
+def test_dead_video_guard_calls_regeneration():
+    src = inspect.getsource(video_assembler.assemble_cinematic_video)
+    assert "_regenerate_dead_video" in src
+    assert "regenerated" in src
+
+
+def test_regenerate_dead_video_uses_title_context(tmp_path, monkeypatch):
+    import src.backend.free_prompting as fp
+    import src.backend.video_gen_ai as vg
+    seen = {}
+
+    def fake_ask(system, user, max_new_tokens=300):
+        seen["user"] = user
+        return "slow push-in with drifting fog"
+
+    def fake_gen(image_path, prompt, duration=9.0, output_dir="", **kw):
+        seen["prompt"] = prompt
+        seen["duration"] = duration
+        p = str(tmp_path / "regen.mp4")
+        with open(p, "wb") as f:
+            f.write(b"x" * 2000)
+        return p
+
+    monkeypatch.setattr(fp, "_ask_chatgpt", fake_ask)
+    monkeypatch.setattr(vg, "generate_video_from_image", fake_gen)
+    img = str(tmp_path / "img.jpg")
+    with open(img, "wb") as f:
+        f.write(b"y" * 2000)
+    scene = {"narration": "The tiger hunts at dawn",
+             "image_prompt": "tiger in tall grass at dawn"}
+    out = video_assembler._regenerate_dead_video(
+        img, scene, "Tiger Hunt: The Untold Story", 9.0, str(tmp_path))
+    assert out and os.path.exists(out)
+    # the fresh motion script was written FROM the title + scene context...
+    assert "Tiger Hunt: The Untold Story" in seen["user"]
+    assert "tiger hunts at dawn" in seen["user"]
+    # ...and the fresh script (not the stale one) was used to render
+    assert seen["prompt"] == "slow push-in with drifting fog"
+    assert seen["duration"] == 9.0
+
+
+def test_regenerate_returns_none_when_render_fails(tmp_path, monkeypatch):
+    import src.backend.free_prompting as fp
+    import src.backend.video_gen_ai as vg
+    monkeypatch.setattr(fp, "_ask_chatgpt",
+                        lambda s, u, max_new_tokens=300: "slow push-in")
+    monkeypatch.setattr(vg, "generate_video_from_image",
+                        lambda **kw: None)
+    img = str(tmp_path / "img.jpg")
+    with open(img, "wb") as f:
+        f.write(b"y" * 2000)
+    out = video_assembler._regenerate_dead_video(
+        img, {"narration": "x"}, "Title", 9.0, str(tmp_path))
+    assert out is None

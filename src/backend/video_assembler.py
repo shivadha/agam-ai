@@ -510,6 +510,61 @@ def make_progress_bar(duration, width, bar_height=14, color=(0, 255, 170)):
     return VideoClip(make_frame, duration=duration)
 
 
+def _regenerate_dead_video(image_path, scene, topic_title, duration, output_dir):
+    """Regenerate a missing/corrupt AI video from the scene's image.
+
+    Writes a FRESH image-to-video motion script grounded in the video's
+    title + the scene's narration/image prompt (the "title script context"),
+    then renders it via generate_video_from_image. Returns the new video
+    path, or None if regeneration failed.
+    """
+    try:
+        from .free_prompting import _ask_chatgpt
+        from .video_gen_ai import generate_video_from_image
+    except Exception as e:
+        print(f"[video_assembler] regen imports unavailable: {e}")
+        return None
+    title = (topic_title or scene.get("topic_title") or "").strip()
+    narration = (scene.get("narration") or "")[:400]
+    img_prompt = (scene.get("image_prompt") or "")[:400]
+    motion = (scene.get("image_to_video_prompt") or "").strip()
+    try:
+        fresh = _ask_chatgpt(
+            "You are a motion director for AI image-to-video. Write ONE motion "
+            "script: the exact camera movement (slow push-in, pan, tilt, orbit, "
+            "dolly) plus dynamic motion inside the frame (fog drift, particles, "
+            "light flicker). Reply with ONLY the script, no extra text.",
+            f"Video title: \"{title}\"\n"
+            f"Scene voiceover: \"{narration}\"\n"
+            f"The still image shows: \"{img_prompt}\"\n"
+            f"Write one image-to-video motion script that continues this scene's "
+            f"story and matches the video's title. Keep the camera motion slow "
+            f"and smooth — the clip plays {duration:.0f} seconds.",
+            max_new_tokens=300,
+        )
+        if fresh and fresh.strip():
+            motion = fresh.strip()
+            print(f"[video_assembler] Fresh motion script written from title context: {motion[:80]}...")
+    except Exception as e:
+        print(f"[video_assembler] Fresh motion script note: {e} — reusing scene prompt.")
+    if not motion:
+        motion = "slow cinematic push-in with gentle parallax drift, volumetric light"
+    try:
+        new_path = generate_video_from_image(
+            image_path=image_path,
+            prompt=motion,
+            duration=duration,
+            output_dir=output_dir,
+        )
+        if new_path and os.path.exists(new_path) and os.path.getsize(new_path) > 1000:
+            print(f"[video_assembler] Regenerated dead video -> {new_path}")
+            return new_path
+        print("[video_assembler] Regeneration produced no usable file.")
+    except Exception as e:
+        print(f"[video_assembler] Regeneration failed: {e}")
+    return None
+
+
 def _build_caption_events(word_timings_path, subtitle_path):
     """Word-level caption events: [(words_list, active_word_idx, start, end)].
 
@@ -661,16 +716,33 @@ def assemble_cinematic_video(
         
         if video_paths:
             # ── Dead-video guard (user report 2026-09-27: "rest was just black
-            # screen"). A missing/corrupt AI video must NEVER become a black
-            # ColorClip — drop dead files and let the scene fall back to its
-            # images (motion stills) below.
+            # screen"). A missing/corrupt AI video is REGENERATED with a fresh
+            # motion script written from the title + script context; only if
+            # regeneration fails does the scene fall back to its images.
             live = [vp for vp in video_paths
                     if vp and os.path.exists(vp) and os.path.getsize(vp) > 1000]
-            dropped = len(video_paths) - len(live)
-            if dropped:
-                print(f"[video_assembler] Scene {idx+1}: dropped {dropped} dead "
-                      f"video file(s); falling back to images (no black screen).")
-            video_paths = live
+            dead = [vp for vp in video_paths if vp not in set(live)]
+            if dead:
+                shot_est = scene_dur / max(1, len(video_paths))
+                regen = []
+                for d_i, _dv in enumerate(dead):
+                    src_img = (img_paths[d_i] if d_i < len(img_paths)
+                               else (img_paths[0] if img_paths else None))
+                    if src_img and os.path.exists(src_img):
+                        new_vp = _regenerate_dead_video(
+                            src_img, scene, topic_title, shot_est, output_dir)
+                        if new_vp:
+                            regen.append(new_vp)
+                if regen:
+                    print(f"[video_assembler] Scene {idx+1}: regenerated "
+                          f"{len(regen)}/{len(dead)} dead video(s) from title context.")
+                still_dead = len(dead) - len(regen)
+                if still_dead:
+                    print(f"[video_assembler] Scene {idx+1}: {still_dead} video(s) "
+                          f"unrecoverable; falling back to images (no black screen).")
+                video_paths = live + regen
+            else:
+                video_paths = live
 
         if video_paths:
             shot_duration = scene_dur / len(video_paths)
