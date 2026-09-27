@@ -170,3 +170,74 @@ def test_parse_comfyui_force():
     assert p("ComfyUI (SVD) [Free GPU]") == "svd"
     assert p("MiniMax-H3 (HF Space) [Free, No Key]") is None
     assert p("") is None
+
+
+# ── LTX-2 handling (user: "there is ltx-2", 2026-09-27) ───────────────────
+# LTX-2 (Lightricks 19B video+audio) must never misclassify as LTX-Video 2B
+# and never be auto-picked: our ComfyUI workflow targets 2B nodes and can't
+# drive LTX-2's graph. It IS detected and shown in candidates.
+
+def test_classify_ltx2_variants():
+    assert cs.classify_i2v("ltx-2-19b-dev.safetensors") == "ltx2"
+    assert cs.classify_i2v("ltx-2-19b-distilled.safetensors") == "ltx2"
+    assert cs.classify_i2v("ltx-2-19b-dev-fp8_transformer_only.safetensors") == "ltx2"  # Kijai repack
+    assert cs.classify_i2v("LTX2_audio_vae_bf16.safetensors") == "ltx2"
+    assert cs.classify_i2v("ltxv2-dev.safetensors") == "ltx2"
+
+
+def test_classify_ltx_2b_not_confused_with_ltx2():
+    # Regression: the 2B filenames must still classify as plain LTX
+    assert cs.classify_i2v("ltx-video-2b-v0.9.5.safetensors") == "ltx"
+    assert cs.classify_i2v("ltxv-2b-0.9.1.safetensors") == "ltx"
+    assert cs.classify_i2v("ltxv-13b-0.9.7-distilled.safetensors") == "ltx"
+
+
+def test_rank_never_picks_ltx2():
+    # LTX-2 installed alongside SVD: SVD wins (ltx2 excluded from auto-pick)
+    kind, name = cs.rank_i2v_models(["ltx-2-19b-dev.safetensors", "svd_xt_1_1.safetensors"])
+    assert (kind, name) == ("svd", "svd_xt_1_1.safetensors")
+
+
+def test_rank_ltx2_only_gives_nothing_drivable():
+    assert cs.rank_i2v_models(["ltx-2-19b-dev.safetensors"]) == (None, None)
+
+
+def test_rank_ltx2_does_not_shadow_real_ltx():
+    kind, name = cs.rank_i2v_models(["ltx-2-19b-dev.safetensors",
+                                     "ltx-video-2b-v0.9.5.safetensors"])
+    assert (kind, name) == ("ltx", "ltx-video-2b-v0.9.5.safetensors")
+
+
+def test_scan_lists_ltx2_but_recommends_drivable(monkeypatch):
+    _mock_comfyui(monkeypatch,
+                  checkpoints=("svd_xt_1_1.safetensors",),
+                  diffusion=("ltx-2-19b-dev.safetensors",))
+    res = cs.scan_comfyui(refresh=True)
+    kinds = [c["kind"] for c in res["candidates"]]
+    assert "ltx2" in kinds  # detected and visible in UI
+    assert res["recommended"]["kind"] == "svd"  # never the ltx2
+    assert "LTX-2" in res["reason"]  # reason says why it was skipped
+
+
+def test_scan_ltx2_only_reports_no_drivable_model(monkeypatch):
+    _mock_comfyui(monkeypatch, checkpoints=(), diffusion=("ltx-2-19b-dev.safetensors",))
+    res = cs.scan_comfyui(refresh=True)
+    assert res["recommended"] is None
+    assert "LTX-2" in res["reason"]
+
+
+def test_estimate_vram_ltx2():
+    est = cs.estimate_vram_gb("ltx-2-19b-dev.safetensors", "ltx2")
+    assert est >= 20  # 19B class: ~40GB dev bf16, never fits 6GB
+
+
+def test_parse_force_ltx2_before_ltx():
+    # "(ltx" must not swallow "(ltx-2"
+    assert vg._parse_comfyui_force("ComfyUI (LTX-2) [Free GPU]") == "ltx2"
+    assert vg._parse_comfyui_force("ComfyUI (LTX-Video) [Free GPU]") == "ltx"
+
+
+def test_generate_force_ltx2_fails_fast():
+    # No mocks needed: the guard runs before any network/server check
+    with pytest.raises(RuntimeError, match="LTX-2"):
+        vg._generate_comfyui_wan("x.png", "prompt", 9.0, "o.mp4", force="ltx2")

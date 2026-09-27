@@ -239,6 +239,9 @@ def _parse_comfyui_force(provider: str):
         return None
     if "auto" in prov or ("wan" in prov and "ltx" in prov):
         return None
+    # LTX-2 before LTX: "(ltx" would otherwise match "(ltx-2..."
+    if "ltx-2" in prov or "ltxv2" in prov or "ltxav" in prov or "ltx2" in prov:
+        return "ltx2"
     if ":ltx" in prov or "(ltx" in prov or "ltx-video" in prov:
         return "ltx"
     if ":wan" in prov or "(wan" in prov:
@@ -259,6 +262,8 @@ def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
     the longest native clip — LTX-Video (~10s) > Wan (~5s) > SVD (~3.6s) —
     preferring one that fits VRAM. Pass force='ltx'/'wan'/'svd' (or an exact
     checkpoint filename) to override the auto-pick from the UI.
+    LTX-2 is detected but never auto-picked or forced: it needs its own
+    video+audio ComfyUI node graph (not supported yet) and 20GB+ VRAM.
 
     Falls back gracefully if ComfyUI is not running.
     """
@@ -270,6 +275,15 @@ def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
     import shutil
     import base64
     import os
+
+    # Fail fast: LTX-2 checkpoints can't be driven by this workflow (it targets
+    # LTX-Video 2B nodes; LTX-2 needs its own video+audio node graph and 20GB+
+    # VRAM). A clear error beats submitting an incompatible workflow.
+    if (force or "").lower() == "ltx2":
+        raise RuntimeError(
+            "LTX-2 is installed, but AGAM's ComfyUI workflow targets LTX-Video "
+            "2B nodes — LTX-2 (19B video+audio combo) needs its own node graph "
+            "and 20GB+ VRAM. Use the auto-scan provider to pick a drivable model.")
 
     TIMEOUT = 600  # 10 minutes max wait for generation
 
@@ -348,6 +362,11 @@ def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
             # exact checkpoint filename
             for c in scan["candidates"]:
                 if c["name"] == force or c["name"].lower() == fl:
+                    if c["kind"] == "ltx2":
+                        raise RuntimeError(
+                            "LTX-2 checkpoint selected, but AGAM's ComfyUI workflow "
+                            "targets LTX-Video 2B nodes — LTX-2 needs its own "
+                            "video+audio node graph and 20GB+ VRAM.")
                     if c["kind"] == "ltx":
                         ltx_model = c["name"]
                     elif c["kind"] == "wan":
