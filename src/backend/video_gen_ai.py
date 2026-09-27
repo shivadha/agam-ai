@@ -9,14 +9,23 @@ import math
 import numpy as np
 from PIL import Image, ImageFilter, ImageEnhance
 
-def generate_video_from_image(image_path: str, prompt: str, duration: float = 4.0, provider: str = "Luma", api_key: str = "", output_dir: str = "C:\\AI_project\\output") -> str:
+# Minimum length (seconds) of every image-to-video clip the pipeline
+# renders. Scene timings shorter than this are extended so no video
+# ever comes out as a stubby 3-4s loop.
+MIN_SHOT_SECONDS = 10.0
+
+def generate_video_from_image(image_path: str, prompt: str, duration: float = 10.0, provider: str = "Luma", api_key: str = "", output_dir: str = "C:\\AI_project\\output") -> str:
     """
     Triggers AI Image-to-Video generation. 
     Implements a self-healing fallback queue:
     1. Tries cloud AI models (HuggingFace SVD, Pollinations, Luma, Runway, Kling, fal.ai) if credentials exist.
     2. Guarantees 100% success by falling back to the built-in Procedural Neural Motion Engine
        which synthesizes 10+ dynamic camera physics effects directly matching the prompt.
+
+    Every generated clip is at least MIN_SHOT_SECONDS long — short
+    scene timings never produce stubby 3-4s videos.
     """
+    duration = max(MIN_SHOT_SECONDS, float(duration or MIN_SHOT_SECONDS))
     os.makedirs(output_dir, exist_ok=True)
     import re
     clean_p = re.sub(r'[^a-zA-Z0-9_]', '_', provider.lower()).strip('_')
@@ -1179,7 +1188,10 @@ def generate_videos_for_scenes(
 
         scene['video_paths'] = []
         if img_paths:
-            shot_dur = scene_dur / max(1, len(img_paths))
+            # Every shot is at least MIN_SHOT_SECONDS long — a 3s scene
+            # timing never produces a stubby 3s video.
+            shot_dur = max(MIN_SHOT_SECONDS,
+                           scene_dur / max(1, len(img_paths)))
             for j, img_path in enumerate(img_paths):
                 if os.path.exists(img_path):
                     v_path = generate_video_from_image(

@@ -233,6 +233,34 @@ class WorkflowEngine:
                 return node_res[key]
         return None
 
+    def _ensure_script_chain(self, scenes, node_data=None, need_motion=True):
+        """Enforce the script order: reel script -> image script -> image-to-video script.
+
+        1. The reel script (gen-script node) MUST exist in state — fail LOUD
+           if it is missing. Image and motion scripts are always written
+           FROM the reel script, never before it.
+        2. Every scene gets an image prompt grounded in the reel script.
+        3. (need_motion=True) Every scene gets an image-to-video motion
+           script grounded in its image prompt + the reel script.
+
+        Returns the updated scenes list.
+        """
+        main_script = self._find_in_state('script') or ''
+        if not main_script.strip():
+            raise RuntimeError(
+                "Reel script missing — run the gen-script node first. "
+                "Image scripts and image-to-video scripts are always written "
+                "FROM the reel script, never before it.")
+        visual_style = ((node_data or {}).get('visual_style')
+                        or self._find_in_state('visual_style')
+                        or 'cinema_8k')
+        from src.backend.free_prompting import ensure_image_prompts
+        scenes = ensure_image_prompts(scenes, main_script, visual_style)
+        if need_motion:
+            from src.backend.free_prompting import ensure_video_prompts
+            scenes = ensure_video_prompts(scenes, main_script)
+        return scenes
+
     def _collect_sfx_timelines(self) -> List[dict]:
         """Merge every 'sfx_timeline' list found across node states.
 
@@ -471,7 +499,12 @@ class WorkflowEngine:
                 scenes = node_data.get('scenes') or self._find_in_state('scenes')
                 if not scenes:
                     raise ValueError("No scenes provided for multi-image generation.")
-                
+
+                # Script order, step 1+2: reel script (loud fail if missing)
+                # -> image scripts grounded in the reel script.
+                scenes = self._ensure_script_chain(scenes, node_data,
+                                                   need_motion=False)
+
                 image_model = node_data.get('model', 'DALL-E 3')
                 custom_api_key = node_data.get('api_key', '')
                 visual_style = node_data.get('visual_style') or self._find_in_state('visual_style') or 'cinema_8k'
@@ -484,12 +517,6 @@ class WorkflowEngine:
                     prefer = (str(image_model).split(":", 1)[1].strip()
                               if ":" in str(image_model) else None)
                     print(f"[Orchestrator] image-gen via free-web agent (prefer={prefer or 'auto'})")
-                    # Every image gets a ChatGPT-written prompt grounded in
-                    # the main script (fills gaps; gen-script scenes usually
-                    # already carry one).
-                    from src.backend.free_prompting import ensure_image_prompts
-                    main_script = self._find_in_state('script') or ''
-                    scenes = ensure_image_prompts(scenes, main_script, visual_style)
                     for i, scene in enumerate(scenes):
                         prompt = (scene.get('image_prompt')
                                   or (scene.get('image_prompts') or [None])[0]
@@ -523,7 +550,13 @@ class WorkflowEngine:
                 scenes = node_data.get('scenes') or self._find_in_state('scenes')
                 if not scenes:
                     raise ValueError("No scenes provided for image-to-video generation.")
-                    
+
+                # Script order, step 1+2+3: reel script (loud fail if missing)
+                # -> image scripts grounded in the reel script -> motion
+                # scripts grounded in the image prompts + reel script.
+                scenes = self._ensure_script_chain(scenes, node_data,
+                                                   need_motion=True)
+
                 provider = node_data.get('provider', 'ComfyUI (Local Wan / SVD - Free)')
                 api_key = node_data.get('api_key', '')
                 output_dir = OUTPUT_DIR
@@ -537,14 +570,10 @@ class WorkflowEngine:
                     prefer = (str(provider).split(":", 1)[1].strip()
                               if ":" in str(provider) else None)
                     print(f"[Orchestrator] img-to-video via free-web agent (prefer={prefer or 'auto'})")
-                    # Every scene gets a dedicated ChatGPT-written motion
-                    # script (camera + in-frame dynamics) based on the main
-                    # script and the scene's image prompt — not a generic
-                    # push-in. Falls back to the next provider automatically
-                    # if the first option fails (A -> B -> C chain).
-                    from src.backend.free_prompting import ensure_video_prompts
-                    main_script = self._find_in_state('script') or ''
-                    scenes = ensure_video_prompts(scenes, main_script)
+                    # Motion scripts were already written from the reel script +
+                    # image prompts by _ensure_script_chain above. Falls back
+                    # to the next provider automatically if the first option
+                    # fails (A -> B -> C chain).
                     for i, scene in enumerate(scenes):
                         img = (scene.get('image_paths') or [None])[0] or scene.get('image_path')
                         prompt = (scene.get('image_to_video_prompt')
