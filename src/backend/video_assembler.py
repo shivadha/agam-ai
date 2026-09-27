@@ -319,33 +319,62 @@ def create_advanced_motion_effect(image_path, duration, width, height, effect_ty
 def prepare_video_shot(video_path, duration, width, height):
     """
     Loads an AI-generated video file, scales and crops it to vertical 9:16 aspect ratio.
+
+    A short AI clip is played ONCE, then the shot continues with a slow Ken
+    Burns drift on the clip's final frame. (The old vfx.Loop fill made a 1s
+    clip visibly snap back and repeat for the whole shot — "animated for a
+    second then repeats".)
     """
-    from moviepy import VideoFileClip, vfx, ColorClip
+    from moviepy import VideoFileClip, ColorClip, concatenate_videoclips
     try:
         clip = VideoFileClip(video_path)
     except Exception as e:
         print(f"[video_assembler] Error loading AI video {video_path}: {e}")
-        return ColorClip(size=(width, height), color=(0,0,0), duration=duration)
-        
+        return ColorClip(size=(width, height), color=(0, 0, 0), duration=duration)
+
+    if not getattr(clip, "duration", 0):
+        print(f"[video_assembler] AI video has no duration ({video_path}); using fallback.")
+        return ColorClip(size=(width, height), color=(0, 0, 0), duration=duration)
+
     img_ratio = clip.w / clip.h
     target_ratio = width / height
-    
+
     if img_ratio > target_ratio:
         clip = clip.resized(height=height)
-        clip = clip.cropped(x_center=clip.w/2, y_center=clip.h/2, width=width, height=height)
     else:
         clip = clip.resized(width=width)
-        clip = clip.cropped(x_center=clip.w/2, y_center=clip.h/2, width=width, height=height)
-        
+    clip = clip.cropped(x_center=clip.w / 2, y_center=clip.h / 2,
+                        width=width, height=height)
+
     if clip.duration >= duration:
-        clip = clip.subclipped(0, duration)
-    else:
+        return clip.subclipped(0, duration)
+
+    # Short clip: play it once, then drift on its last frame — never loop.
+    tail_dur = duration - clip.duration
+    try:
+        import tempfile
+        from PIL import Image as _PILImage
+        last = clip.get_frame(max(0.0, clip.duration - 0.05))
+        fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="tailframe_")
+        os.close(fd)
+        _PILImage.fromarray(last).save(tmp_path)
         try:
-            clip = clip.with_effects([vfx.Loop(duration=duration)])
-        except Exception:
-            clip = clip.with_duration(duration)
-            
-    return clip
+            tail = create_advanced_motion_effect(tmp_path, tail_dur, width, height, "zoom_in")
+            head = clip.without_audio() if hasattr(clip, "without_audio") else clip
+            full = concatenate_videoclips([head, tail], method="compose").with_duration(duration)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        print(f"[video_assembler] Short AI clip ({clip.duration:.2f}s) plays once + "
+              f"{tail_dur:.2f}s drift tail (no loop).")
+        return full
+    except Exception as e:
+        # Last resort: return the short clip as-is (shot runs slightly short)
+        # rather than crash the render — never silently loop.
+        print(f"[video_assembler] Tail-drift note ({e}); keeping unlooped short clip.")
+        return clip
 
 
 def add_custom_transitions(clips, scenes, width, height):

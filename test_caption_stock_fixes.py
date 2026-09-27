@@ -153,5 +153,135 @@ class TestStockValidation(unittest.TestCase):
         self.assertNotIn("ice", vocab)  # whole-word tokenization, no substring
 
 
+# ── prepare_video_shot: short AI clips must not visibly loop ──────────────
+# moviepy is not installed in this sandbox, so stub the small surface that
+# prepare_video_shot touches. Frames are solid colors that brighten
+# monotonically with t: a loop would snap the brightness back to the start
+# (the sawtooth seen in the user's video); play-once + drift never does.
+
+import types as _types
+import numpy as _np
+
+
+class _FakeClip:
+    def __init__(self, w=540, h=960, duration=1.0, rate=30.0, base=50.0):
+        self.w, self.h, self.duration = w, h, duration
+        self._rate, self._base = rate, base  # brightness units per second
+
+    def _copy(self, **kw):
+        c = _FakeClip(kw.get("w", self.w), kw.get("h", self.h),
+                      kw.get("duration", self.duration),
+                      kw.get("rate", self._rate), kw.get("base", self._base))
+        return c
+
+    def resized(self, *a, **k):
+        c = self._copy()
+        if "height" in k:
+            s = k["height"] / self.h
+            c.w, c.h = self.w * s, k["height"]
+        elif "width" in k:
+            s = k["width"] / self.w
+            c.w, c.h = k["width"], self.h * s
+        elif a and isinstance(a[0], (int, float)):
+            c.w, c.h = self.w * a[0], self.h * a[0]
+        return c
+
+    def cropped(self, x_center=None, y_center=None, width=None, height=None):
+        return self._copy(w=width or self.w, h=height or self.h)
+
+    def subclipped(self, a, b):
+        return self._copy(duration=b - a)
+
+    def with_duration(self, d):
+        return self._copy(duration=d)
+
+    def without_audio(self):
+        return self
+
+    def get_frame(self, t):
+        v = int(min(255, self._base + self._rate * max(0.0, t)))
+        return _np.full((int(self.h), int(self.w), 3), v, dtype=_np.uint8)
+
+
+class _FakeConcat(_FakeClip):
+    def __init__(self, clips):
+        self._clips = clips
+        super().__init__(w=clips[0].w, h=clips[0].h,
+                         duration=sum(c.duration for c in clips))
+
+    def get_frame(self, t):
+        acc = 0.0
+        for c in self._clips:
+            if t < acc + c.duration:
+                return c.get_frame(t - acc)
+            acc += c.duration
+        return self._clips[-1].get_frame(self._clips[-1].duration - 1e-3)
+
+
+def _install_fake_moviepy(video_duration):
+    fake = _types.ModuleType("moviepy")
+    fake.VideoFileClip = lambda path: _FakeClip(w=640, h=960,
+                                                duration=video_duration,
+                                                rate=60.0, base=40.0)
+    fake.ColorClip = lambda *a, **k: _FakeClip(duration=k.get("duration", 1.0),
+                                              rate=0.0, base=0.0)
+    fake.concatenate_videoclips = lambda clips, method="compose": _FakeConcat(clips)
+    sys.modules["moviepy"] = fake
+    return fake
+
+
+def _frame_diffs(clip, upto, step=0.2):
+    from PIL import Image as _PILImage, ImageChops as _IC
+    f0 = _PILImage.fromarray(clip.get_frame(0)).convert("L")
+    diffs = []
+    t = 0.0
+    while t <= upto + 1e-9:
+        f = _PILImage.fromarray(clip.get_frame(t)).convert("L")
+        h = _IC.difference(f0, f).histogram()
+        diffs.append(sum(i * c for i, c in enumerate(h)) / sum(h))
+        t += step
+    return diffs
+
+
+class TestPrepareVideoShot(unittest.TestCase):
+    def test_short_clip_plays_once_then_drifts_no_loop(self):
+        # 1.0s AI clip filling a 3.4s shot: old code vfx.Loop'ed it (visible
+        # 1s snap-back repeat); new code plays once + drifts on last frame.
+        _install_fake_moviepy(video_duration=1.0)
+        tail_calls = []
+
+        def fake_drift(path, dur, w, h, effect):
+            tail_calls.append((dur, effect))
+            self.assertTrue(os.path.exists(path))  # last-frame PNG was written
+            return _FakeClip(w=w, h=h, duration=dur, rate=8.0, base=100.0)
+
+        with patch.object(va, "create_advanced_motion_effect", side_effect=fake_drift):
+            out = va.prepare_video_shot("fake.mp4", 3.4, 1080, 1920)
+        self.assertEqual(len(tail_calls), 1)
+        self.assertAlmostEqual(tail_calls[0][0], 2.4, places=6)
+        self.assertAlmostEqual(out.duration, 3.4, places=6)
+
+        diffs = _frame_diffs(out, 3.3)
+        # Once the picture has clearly moved on, it must never snap back to
+        # (near) the start frame — that snap-back IS the loop glitch.
+        moved = next(i for i, d in enumerate(diffs) if d > 8.0)
+        for d in diffs[moved:]:
+            self.assertGreater(d, 3.0,
+                               f"frame snapped back toward start (loop glitch): {diffs}")
+
+    def test_long_clip_is_trimmed_not_extended(self):
+        _install_fake_moviepy(video_duration=5.0)
+        with patch.object(va, "create_advanced_motion_effect") as drift:
+            out = va.prepare_video_shot("fake.mp4", 3.4, 1080, 1920)
+        drift.assert_not_called()
+        self.assertAlmostEqual(out.duration, 3.4, places=6)
+
+    def test_broken_video_falls_back_without_crash(self):
+        fake = _install_fake_moviepy(video_duration=1.0)
+        fake.VideoFileClip = lambda path: (_ for _ in ()).throw(RuntimeError("nope"))
+        out = va.prepare_video_shot("fake.mp4", 3.4, 1080, 1920)
+        self.assertAlmostEqual(out.duration, 3.4, places=6)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
