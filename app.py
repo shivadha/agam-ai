@@ -2972,6 +2972,7 @@ def api_keys_manager():
                 "MINIMAX_API_KEY": mask("MINIMAX_API_KEY"),
                 "FAL_KEY": mask("FAL_KEY"),
                 "ELEVENLABS_API_KEY": mask("ELEVENLABS_API_KEY"),
+                "FISH_AUDIO_KEY": mask("FISH_AUDIO_KEY") or mask("FISH_API_KEY"),
                 "OPENAI_API_KEY": mask("OPENAI_API_KEY"),
                 "GROQ_API_KEY": mask("GROQ_API_KEY"),
                 "GEMINI_API_KEY": mask("GEMINI_API_KEY"),
@@ -2987,6 +2988,7 @@ def api_keys_manager():
                 "minimax": bool(os.environ.get("MINIMAX_API_KEY")),
                 "fal": bool(os.environ.get("FAL_KEY") or os.environ.get("FAL_API_KEY")),
                 "elevenlabs": bool(os.environ.get("ELEVENLABS_API_KEY")),
+                "fish": bool(os.environ.get("FISH_AUDIO_KEY") or os.environ.get("FISH_API_KEY")),
                 "openai": bool(os.environ.get("OPENAI_API_KEY")),
                 "groq": bool(os.environ.get("GROQ_API_KEY")),
                 "gemini": bool(os.environ.get("GEMINI_API_KEY")),
@@ -3029,12 +3031,13 @@ def api_keys_manager():
         "HUGGINGFACE_TOKEN": "HF_TOKEN",
         "META_API_KEY": "MUSE_API_KEY",
         "EXPERIENTIAL_API_KEY": "ASTRA_API_KEY",
+        "FISH_API_KEY": "FISH_AUDIO_KEY",
     }
     for k in ["MINIMAX_API_KEY", "FAL_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY",
               "GROQ_API_KEY", "GEMINI_API_KEY", "MUSE_API_KEY", "HF_TOKEN",
               "ASTRA_API_KEY", "OPENROUTER_API_KEY", "PIXABAY_API_KEY", "PEXELS_API_KEY",
-              "COMFYUI_URL",
-              "HUGGINGFACE_TOKEN", "META_API_KEY", "EXPERIENTIAL_API_KEY"]:
+              "COMFYUI_URL", "FISH_AUDIO_KEY",
+              "HUGGINGFACE_TOKEN", "META_API_KEY", "EXPERIENTIAL_API_KEY", "FISH_API_KEY"]:
         if k in data:
             update_key(KEY_ALIASES.get(k, k), data[k])
 

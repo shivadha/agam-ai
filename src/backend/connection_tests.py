@@ -350,6 +350,25 @@ def test_tts(provider: str = "", api_key: str = "") -> dict:
         except Exception as e:
             return _fail(f"ElevenLabs unreachable: {e}", t0, "ElevenLabs")
 
+    if "fish" in prov:
+        fish_key = (api_key or "").strip() or _env("FISH_AUDIO_KEY") or _env("FISH_API_KEY")
+        if not fish_key:
+            return _fail("Fish Audio selected but no API key (node config or FISH_AUDIO_KEY). Free key: fish.audio → API keys.", t0, "Fish Audio")
+        try:
+            # Cheap authed probe: list one voice-library model. 402 (no credit)
+            # still proves the key is valid — only 401/403 mean a bad key.
+            r = requests.get("https://api.fish.audio/model?page_size=1",
+                             headers={"Authorization": f"Bearer {fish_key}"}, timeout=10)
+            if r.status_code == 200:
+                return _ok("Fish Audio", "Fish Audio API key valid (free s2.1-pro-free tier).", t0)
+            if r.status_code == 402:
+                return _ok("Fish Audio", "Fish Audio key valid but API credit is $0 — claim free credits at fish.audio/app/developers.", t0)
+            if r.status_code in (401, 403):
+                return _fail(f"Fish Audio key rejected (HTTP {r.status_code}).", t0, "Fish Audio")
+            return _fail(f"Fish Audio probe returned HTTP {r.status_code}.", t0, "Fish Audio")
+        except Exception as e:
+            return _fail(f"Fish Audio unreachable: {e}", t0, "Fish Audio")
+
     # Default: Edge-TTS (cloud, keyless) — verify the service endpoint is reachable
     try:
         import socket

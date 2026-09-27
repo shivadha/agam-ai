@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import edge_tts
 
@@ -92,6 +93,75 @@ async def _generate_audio_async(text: str, output_path: str, voice: str):
         print(f"[VoiceGen] Exact word-timing note: {wt_err}")
 
     return output_path, srt_path
+
+
+# ── Fish Audio TTS (free s2.1-pro-free tier) ──────────────────────────────
+FISH_TTS_URL = "https://api.fish.audio/v1/tts"
+
+def _fish_api_key() -> str:
+    """Canonical FISH_AUDIO_KEY, with FISH_API_KEY accepted as an alias."""
+    return (os.environ.get("FISH_AUDIO_KEY", "").strip()
+            or os.environ.get("FISH_API_KEY", "").strip())
+
+
+def _generate_audio_fish(text: str, output_path: str, voice: str = "fish", api_key: str = None):
+    """Generate audio via the Fish Audio TTS API (free s2.1-pro-free model).
+
+    `voice` may be "fish" (model default voice) or "fish:<reference_id>" to
+    pin a specific Fish Audio library/cloned voice. Raises RuntimeError on
+    any failure — the caller falls back to Edge-TTS so a render never dies
+    because the free promo tier hiccuped.
+    """
+    import requests
+
+    key = (api_key or "").strip() or _fish_api_key()
+    if not key:
+        raise RuntimeError("FISH_AUDIO_KEY is not set (get a free key at fish.audio → API keys)")
+
+    reference_id = None
+    m = re.search(r"fish:([A-Za-z0-9_-]{1,128})", (voice or ""), re.IGNORECASE)
+    if m:
+        reference_id = m.group(1)
+
+    model = os.environ.get("FISH_AUDIO_MODEL", "s2.1-pro-free").strip() or "s2.1-pro-free"
+    body = {
+        "text": text,
+        "format": "mp3",
+        "normalize": True,
+        "prosody": {"speed": 1.0, "volume": 0},
+    }
+    if reference_id:
+        body["reference_id"] = reference_id
+
+    # NOTE: the model rides in the `model` HTTP header, NOT the JSON body.
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "model": model,
+    }
+    print(f"[VoiceGen] Fish Audio TTS ({model}) — {len(text)} chars"
+          + (f", voice {reference_id}" if reference_id else ", default voice") + "...")
+    r = requests.post(FISH_TTS_URL, headers=headers, json=body, timeout=300)
+    if r.status_code == 402:
+        raise RuntimeError(
+            "Fish Audio: insufficient API credit (HTTP 402). Claim the free "
+            "sign-up credits at fish.audio/app/developers — API credit is "
+            "separate from platform credit.")
+    if r.status_code in (401, 403):
+        raise RuntimeError(f"Fish Audio: API key rejected (HTTP {r.status_code}).")
+    if r.status_code != 200:
+        raise RuntimeError(f"Fish Audio TTS failed (HTTP {r.status_code}): {r.text[:200]}")
+    if "json" in r.headers.get("Content-Type", ""):
+        raise RuntimeError(f"Fish Audio returned an error payload: {r.text[:200]}")
+    if len(r.content) < 1024:
+        raise RuntimeError("Fish Audio returned suspiciously few bytes — treating as failure.")
+
+    with open(output_path, "wb") as f:
+        f.write(r.content)
+    print(f"[VoiceGen] Fish Audio saved {len(r.content)} bytes -> {os.path.basename(output_path)}")
+    # No word-level timings from Fish (raw audio bytes); the orchestrator's
+    # transcribe_word_timings() runs faster-whisper on this file automatically.
+    return output_path, None
 
 
 def _generate_audio_elevenlabs(text: str, output_path: str, voice_id: str = "21m00Tcm4TlvDq8ikWAM", api_key: str = None):
@@ -242,7 +312,7 @@ def _generate_audio_kokoro(text: str, output_path: str, voice: str = "af_heart")
 
 
 def _resolve_tts_provider(voice: str, provider: str) -> str:
-    """Decide which TTS engine renders a request: kokoro | edge-tts | elevenlabs.
+    """Decide which TTS engine renders a request: kokoro | edge-tts | elevenlabs | fish.
 
     Edge neural voices (e.g. en-IN-PrabhatNeural) ALWAYS go to Edge-TTS —
     Kokoro can't render those voice IDs and would silently swap in af_heart,
@@ -252,6 +322,8 @@ def _resolve_tts_provider(voice: str, provider: str) -> str:
     p = (provider or "auto").lower()
     if v.startswith("elevenlabs") or p == "elevenlabs":
         return "elevenlabs"
+    if v.startswith("fish") or p == "fish":
+        return "fish"
     if v.startswith(("af_", "am_", "kokoro")):
         return "kokoro"
     if "neural" in v:
@@ -268,6 +340,8 @@ def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", 
       1. Kokoro-82M: Local, 100% free, ElevenLabs-quality neural voice synthesis with synced SRT.
       2. Edge-TTS: Free, ultra-fast, unlimited Microsoft neural voices.
       3. ElevenLabs: Premium voice cloning (requires ELEVENLABS_API_KEY).
+      4. Fish Audio: Free s2.1-pro-free tier (requires FISH_AUDIO_KEY); any
+         failure falls back to Edge-TTS automatically.
     Saves the output to C:\\AI_project\\output\\ or the specified path.
     Returns (audio_path, srt_path).
     """
@@ -295,6 +369,22 @@ def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", 
         # Asked for ElevenLabs but no key present — Edge-TTS, never a
         # silent voice swap.
         resolved = "edge-tts"
+
+    # Fish Audio (free s2.1-pro-free tier). The free tier is promotional and
+    # can 402 / rate-limit / vanish — ANY failure falls back to Edge-TTS so
+    # a render never dies on it.
+    if resolved == "fish":
+        fish_key = (api_key or "").strip() or _fish_api_key()
+        if not fish_key:
+            print("[VoiceGen] Fish Audio selected but FISH_AUDIO_KEY is not set — "
+                  "falling back to Edge-TTS. (Free key: fish.audio → API keys)")
+            resolved = "edge-tts"
+        else:
+            try:
+                return _generate_audio_fish(text, output_path, voice=voice, api_key=fish_key)
+            except Exception as fe:
+                print(f"[VoiceGen] Fish Audio failed ({fe}). Falling back to Edge-TTS...")
+                resolved = "edge-tts"
 
     # Primary recommendation: Kokoro-82M (ElevenLabs quality, 100% free local)
     is_kokoro = resolved == "kokoro"

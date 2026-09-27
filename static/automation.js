@@ -152,7 +152,7 @@ const NODE_CONFIGS = {
         { key:'keywords', label:'Focus Keywords', type:'text', placeholder:'AI, automation, YouTube...', def:'' },
     ],
     'tts': [
-        { key:'voice',    label:'Voice',         type:'select', opts:['Kokoro-82M (af_heart) [Local Free]','Kokoro-82M (am_adam) [Local Free]','en-US-ChristopherNeural (Edge)','en-US-JennyNeural (Edge)','en-GB-RyanNeural (Edge)'], def:'Kokoro-82M (af_heart) [Local Free]' },
+        { key:'voice',    label:'Voice',         type:'select', opts:['Kokoro-82M (af_heart) [Local Free]','Kokoro-82M (am_adam) [Local Free]','Fish Audio S2.1 (Free API)','en-US-ChristopherNeural (Edge)','en-US-JennyNeural (Edge)','en-GB-RyanNeural (Edge)'], def:'Kokoro-82M (af_heart) [Local Free]' },
         { key:'voice_preset', label:'Signature Voice Preset (overrides voice)', type:'text', placeholder:'e.g. my-channel-voice', def:'' },
         { key:'speed',    label:'Speed',         type:'range',  min:0.5, max:2.0, step:0.1, def:1.1 },
         { key:'language', label:'Language',      type:'select', opts:['English','Hindi','Spanish','French','Japanese'], def:'English' },
@@ -468,6 +468,7 @@ function cacheDOM() {
         keyInputMinimax:     g('keyInputMinimax'),
         keyInputFal:         g('keyInputFal'),
         keyInputElevenlabs:  g('keyInputElevenlabs'),
+        keyInputFish:        g('keyInputFish'),
         keyInputOpenai:      g('keyInputOpenai'),
         keyInputGroq:        g('keyInputGroq'),
         keyInputMuse:        g('keyInputMuse'),
@@ -480,6 +481,7 @@ function cacheDOM() {
         badgeMinimaxKey:     g('badgeMinimaxKey'),
         badgeFalKey:         g('badgeFalKey'),
         badgeElevenKey:      g('badgeElevenKey'),
+        badgeFishKey:        g('badgeFishKey'),
         badgeOpenaiKey:      g('badgeOpenaiKey'),
         badgeGroqKey:        g('badgeGroqKey'),
         badgeMuseKey:        g('badgeMuseKey'),
@@ -4087,6 +4089,7 @@ async function loadApiKeys() {
             if (D.keyInputMinimax && !D.keyInputMinimax.value) D.keyInputMinimax.placeholder = k.MINIMAX_API_KEY || 'Enter MiniMax API Key';
             if (D.keyInputFal && !D.keyInputFal.value) D.keyInputFal.placeholder = k.FAL_KEY || 'Enter FAL_KEY';
             if (D.keyInputElevenlabs && !D.keyInputElevenlabs.value) D.keyInputElevenlabs.placeholder = k.ELEVENLABS_API_KEY || 'Enter ElevenLabs API Key';
+            if (D.keyInputFish && !D.keyInputFish.value) D.keyInputFish.placeholder = k.FISH_AUDIO_KEY || 'Enter Fish Audio API Key';
             if (D.keyInputOpenai && !D.keyInputOpenai.value) D.keyInputOpenai.placeholder = k.OPENAI_API_KEY || 'sk-...';
             if (D.keyInputGroq && !D.keyInputGroq.value) D.keyInputGroq.placeholder = k.GROQ_API_KEY || 'gsk_...';
             if (D.keyInputMuse && !D.keyInputMuse.value) D.keyInputMuse.placeholder = k.MUSE_API_KEY || 'LLM_...';
@@ -4100,6 +4103,7 @@ async function loadApiKeys() {
             _updateKeyBadge(D.badgeMinimaxKey, is_set.minimax, 'Configured', 'Not Set');
             _updateKeyBadge(D.badgeFalKey, is_set.fal, 'Configured', 'Optional');
             _updateKeyBadge(D.badgeElevenKey, is_set.elevenlabs, 'Configured', 'Edge-TTS Active');
+            _updateKeyBadge(D.badgeFishKey, is_set.fish, 'Configured', 'Edge-TTS Active');
             _updateKeyBadge(D.badgeOpenaiKey, is_set.openai, 'Configured', 'Optional');
             _updateKeyBadge(D.badgeGroqKey, is_set.groq, 'Configured', 'Optional');
             _updateKeyBadge(D.badgeMuseKey, is_set.muse, 'Configured', 'Optional');
@@ -4150,6 +4154,7 @@ async function saveApiKeys() {
     if (D.keyInputMinimax?.value?.trim()) payload.MINIMAX_API_KEY = D.keyInputMinimax.value.trim();
     if (D.keyInputFal?.value?.trim()) payload.FAL_KEY = D.keyInputFal.value.trim();
     if (D.keyInputElevenlabs?.value?.trim()) payload.ELEVENLABS_API_KEY = D.keyInputElevenlabs.value.trim();
+if (D.keyInputFish?.value?.trim()) payload.FISH_AUDIO_KEY = D.keyInputFish.value.trim();
     if (D.keyInputOpenai?.value?.trim()) payload.OPENAI_API_KEY = D.keyInputOpenai.value.trim();
     if (D.keyInputGroq?.value?.trim()) payload.GROQ_API_KEY = D.keyInputGroq.value.trim();
     if (D.keyInputMuse?.value?.trim()) payload.MUSE_API_KEY = D.keyInputMuse.value.trim();
@@ -4178,6 +4183,7 @@ async function saveApiKeys() {
             if (D.keyInputMinimax) D.keyInputMinimax.value = '';
             if (D.keyInputFal) D.keyInputFal.value = '';
             if (D.keyInputElevenlabs) D.keyInputElevenlabs.value = '';
+            if (D.keyInputFish) D.keyInputFish.value = '';
             if (D.keyInputOpenai) D.keyInputOpenai.value = '';
             if (D.keyInputGroq) D.keyInputGroq.value = '';
             if (D.keyInputMuse) D.keyInputMuse.value = '';
@@ -4297,6 +4303,14 @@ async function validateWorkflowRequirements() {
             return {
                 ok: false,
                 error: "ElevenLabs voice selected, but ELEVENLABS_API_KEY is not configured! Please configure your key in API Keys, or switch to built-in free Edge-TTS in node settings.",
+                openModal: true
+            };
+        }
+
+        if ((provider === 'fish' || voice.startsWith('fish')) && !isSet.fish) {
+            return {
+                ok: false,
+                error: "Fish Audio voice selected, but FISH_AUDIO_KEY is not configured! Add your free key (fish.audio → API keys) in API Keys, or switch to built-in free Edge-TTS in node settings.",
                 openModal: true
             };
         }
