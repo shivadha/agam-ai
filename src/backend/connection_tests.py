@@ -137,7 +137,7 @@ def test_llm(model_name: str = "", api_key: str = "") -> dict:
             r = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                json={"model": "llama-3.3-70b-versatile",
+                json={"model": "openai/gpt-oss-120b",
                       "messages": [{"role": "user", "content": "ping"}],
                       "max_tokens": 5},
                 timeout=12,
@@ -153,13 +153,13 @@ def test_llm(model_name: str = "", api_key: str = "") -> dict:
         note("Gemini")
         try:
             r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gem_key}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gem_key}",
                 headers={"Content-Type": "application/json"},
                 json={"contents": [{"parts": [{"text": "ping"}]}]},
                 timeout=12,
             )
             if r.status_code == 200:
-                return _ok("Google Gemini", "Gemini 2.0 Flash is live.", t0)
+                return _ok("Google Gemini", "Gemini 2.5 Flash is live.", t0)
         except Exception:
             pass
 
@@ -184,6 +184,24 @@ def test_llm(model_name: str = "", api_key: str = "") -> dict:
                              headers={"Authorization": f"Bearer {or_key}"}, timeout=10)
             if r.status_code == 200:
                 return _ok("OpenRouter", "OpenRouter free-model gateway is live.", t0)
+        except Exception:
+            pass
+
+    # 6.6. Cerebras (free tier, no card)
+    cb_key = _env("CEREBRAS_API_KEY")
+    if cb_key:
+        note("Cerebras")
+        try:
+            r = requests.post(
+                "https://api.cerebras.ai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {cb_key}", "Content-Type": "application/json"},
+                json={"model": "gpt-oss-120b",
+                      "messages": [{"role": "user", "content": "ping"}],
+                      "max_tokens": 5},
+                timeout=12,
+            )
+            if r.status_code == 200:
+                return _ok("Cerebras", "Cerebras free tier is live.", t0)
         except Exception:
             pass
 

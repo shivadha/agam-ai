@@ -11,9 +11,9 @@ class LLMClient:
     """
     Unified High-Speed LLM Client for AGAM.
     Supports:
-    1. Groq (Free, ultra-fast 800 tokens/sec: llama-3.3-70b-versatile, llama-3.1-8b-instant)
+    1. Groq (Free, ultra-fast: openai/gpt-oss-120b, openai/gpt-oss-20b, qwen/qwen3.8-27b)
     2. Agent Router (New API / One API OpenAI-compatible endpoint)
-    3. OpenRouter (Free models: llama-3.3-70b, gemini-2.0-flash, qwen)
+    3. OpenRouter (Free :free models: gpt-oss-120b, gemma-4-31b-it, nemotron-3.5-lightning)
     4. Experiential Labs / Astra (auto-disabled if 429 quota error)
     5. Local Ollama (offline fast stream)
     """
@@ -57,7 +57,7 @@ class LLMClient:
         # 2. Custom Key or Groq Key
         if key.startswith("gsk_") or self.groq_key:
             groq_key = key if key.startswith("gsk_") else self.groq_key
-            groq_model = "llama-3.3-70b-versatile"
+            groq_model = "openai/gpt-oss-120b"
             print(f"[AGAM LLM] Routing to ultra-fast Groq ({groq_model})...")
             res = self._call_openai_compat("https://api.groq.com/openai/v1", groq_key, groq_model, messages, temperature)
             if res:
@@ -140,7 +140,7 @@ class LLMClient:
         # 2. Custom Key or Groq Key (Ultra-fast, ~100ms first token!)
         if key.startswith("gsk_") or self.groq_key:
             groq_key = key if key.startswith("gsk_") else self.groq_key
-            groq_model = "llama-3.3-70b-versatile"
+            groq_model = "openai/gpt-oss-120b"
             print(f"[AGAM LLM Stream] Connecting to ultra-fast Groq API ({groq_model})...")
             try:
                 endpoint = "https://api.groq.com/openai/v1/chat/completions"

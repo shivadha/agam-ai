@@ -124,7 +124,7 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
     Walk the provider chain and return the first successful completion text,
     or None when nothing produced output. Order mirrors production priority:
     Astra -> explicit Ollama -> Muse Spark -> Groq -> Gemini -> OpenAI ->
-    OpenRouter (free :free models) -> Pollinations (free) ->
+    OpenRouter (free :free models) -> Cerebras (free) -> Pollinations (free) ->
     Hugging Face Inference (free).
     """
     content_str = None
@@ -239,11 +239,15 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
             except Exception as g_err:
                 print(f"[script_gen] [{tag}] Groq attempt failed ({g_model}): {g_err}")
 
-    # 4. Google Gemini API
-    gemini_key = clean_key if ("gemini" in model_name.lower()) else (os.environ.get("GEMINI_API_KEY", "").strip() or clean_key)
+    # 4. Google Gemini API (AI Studio free tier: no card, ~1,500 req/day).
+    # gemini-2.0-flash was shut down 2026-06-01 — do not use.
+    gemini_key = clean_key if ("gemini" in model_name.lower()) else (
+        os.environ.get("GEMINI_API_KEY", "").strip()
+        or os.environ.get("GOOGLE_AI_STUDIO_KEY", "").strip()
+        or clean_key)
     if not content_str and gemini_key:
         print(f"[script_gen] [{tag}] Routing to Google Gemini API...")
-        for gem_model in ["gemini-2.0-flash", "gemini-1.5-flash"]:
+        for gem_model in ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"]:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{gem_model}:generateContent?key={gemini_key}"
                 payload = {
@@ -289,6 +293,7 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
     # 5.5. OpenRouter — one free key unlocks 300+ models, many with :free tiers.
     # Free tier needs no card: 20 req/min, 50 req/day. Tries several free
     # models in order since the free lineup rotates without warning.
+    # (Refreshed 2026-09-27; override via OPENROUTER_MODELS env.)
     or_key = ""
     if "openrouter" in model_name.lower():
         or_key = clean_key or os.environ.get("OPENROUTER_API_KEY", "").strip()
@@ -296,10 +301,12 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
         or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not content_str and or_key:
         or_models = [m.strip() for m in os.environ.get("OPENROUTER_MODELS", "").split(",") if m.strip()] or [
-            "deepseek/deepseek-chat:free",
-            "qwen/qwen3-235b-a22b:free",
-            "google/gemma-3-27b-it:free",
             "openai/gpt-oss-120b:free",
+            "openai/gpt-oss-20b:free",
+            "google/gemma-4-31b-it:free",
+            "nvidia/nemotron-3.5-lightning:free",
+            "z-ai/glm-5.2:free",
+            "cohere/north-mini-code:free",
         ]
         print(f"[script_gen] [{tag}] Routing to OpenRouter (free models)...")
         for or_model in or_models:
@@ -322,6 +329,33 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
                     print(f"[script_gen] [{tag}] OpenRouter ({or_model}) HTTP {or_resp.status_code}: {or_resp.text[:120]}")
             except Exception as or_err:
                 print(f"[script_gen] [{tag}] OpenRouter attempt failed ({or_model}): {or_err}")
+
+    # 5.6. Cerebras — free tier, no card: ~1M tokens/day, very fast inference.
+    # OpenAI-compatible endpoint. Good overflow when OpenRouter's daily quota
+    # is spent.
+    cb_key = os.environ.get("CEREBRAS_API_KEY", "").strip()
+    if not content_str and cb_key:
+        print(f"[script_gen] [{tag}] Routing to Cerebras (free tier)...")
+        for cb_model in ["gpt-oss-120b", "qwen-3.8-27b"]:
+            try:
+                cb_resp = requests.post(
+                    "https://api.cerebras.ai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {cb_key}", "Content-Type": "application/json"},
+                    json={"model": cb_model,
+                          "messages": [{"role": "system", "content": system_prompt},
+                                       {"role": "user", "content": user_prompt}],
+                          "temperature": 0.7,
+                          "max_tokens": max_new_tokens},
+                    timeout=45,
+                )
+                if cb_resp.status_code == 200:
+                    content_str = cb_resp.json()["choices"][0]["message"]["content"]
+                    print(f"[script_gen] [{tag}] [OK] Cerebras ({cb_model}) responded.")
+                    break
+                else:
+                    print(f"[script_gen] [{tag}] Cerebras ({cb_model}) HTTP {cb_resp.status_code}: {cb_resp.text[:120]}")
+            except Exception as cb_err:
+                print(f"[script_gen] [{tag}] Cerebras attempt failed ({cb_model}): {cb_err}")
 
     # 6. Free Online Pollinations Text AI Engine
     if not content_str:
