@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
@@ -256,6 +257,14 @@ class WorkflowEngine:
                         or 'cinema_8k')
         from src.backend.free_prompting import ensure_image_prompts
         scenes = ensure_image_prompts(scenes, main_script, visual_style)
+        # Clone mode: stamp the reference's composition/palette hint onto
+        # every image prompt so the new frames match the reference look.
+        for sc in scenes:
+            hint = (sc.get("composition_hint") or "").strip()
+            if hint:
+                ip = sc.get("image_prompt") or ""
+                if hint not in ip:
+                    sc["image_prompt"] = (ip + " " + hint).strip()
         if need_motion:
             from src.backend.free_prompting import ensure_video_prompts
             scenes = ensure_video_prompts(scenes, main_script)
@@ -493,6 +502,129 @@ class WorkflowEngine:
                     "hindi_audio_path": hindi_audio_path
                 }
                 
+            elif node_type == 'clone-short':
+                # ── Reference-clone: copy a YouTube Short's structure
+                #    frame-by-frame, then rebuild it with a NEW script. ──
+                # Order inside this node:
+                #   1. analyze the reference (shots, durations, camera moves,
+                #      palette/mood per shot),
+                #   2. write the NEW reel script with exactly one scene per
+                #      reference shot, each timed to its shot's duration,
+                #   3. ground each image prompt in the script + the shot's
+                #      composition hint,
+                #   4. copy each shot's camera move literally as the
+                #      image-to-video motion script.
+                # Downstream nodes (image-gen -> img-to-video -> assemble)
+                # then run unchanged.
+                from src.backend.reference_clone import (
+                    analyze_reference, split_script_for_shots)
+                from src.backend.script_gen import generate_video_content
+
+                reference_url = (node_data.get('reference_url')
+                                 or node_data.get('url') or '').strip()
+                if not reference_url:
+                    raise ValueError(
+                        "clone-short: no reference_url provided. Paste the "
+                        "YouTube Short URL in the node's Reference URL field.")
+                topic_title = (node_data.get('topic_title')
+                               or node_data.get('topic')
+                               or self._find_in_state('topic_title')
+                               or 'Cloned Short')
+                custom_script = (node_data.get('custom_script') or '').strip()
+                ai_model = node_data.get('model', 'GPT-4o')
+                custom_api_key = node_data.get('api_key', '') or node_data.get('custom_api_key', '')
+                visual_style = (node_data.get('visual_style')
+                                or self._find_in_state('visual_style') or 'cinema_8k')
+
+                work_dir = os.path.join("data", "reference_clone",
+                                        f"clone_{int(time.time())}")
+                print(f"[Orchestrator] clone-short: analyzing {reference_url}")
+                plan = analyze_reference(reference_url, work_dir)
+                shots = plan["shots"]
+                if not shots:
+                    raise RuntimeError("clone-short: no shots detected in the reference video.")
+                shot_durations = [s["duration"] for s in shots]
+                total_dur = round(sum(shot_durations), 1)
+                print(f"[Orchestrator] clone-short: {len(shots)} shots, "
+                      f"{total_dur}s total — writing new script for '{topic_title}'")
+
+                if custom_script:
+                    # User pasted their own script: distribute it across the
+                    # reference shots, proportional to shot duration.
+                    narrations = split_script_for_shots(custom_script, [
+                        (s["start"], s["end"]) for s in shots])
+                    scenes_list = []
+                    for i, (shot, narration) in enumerate(zip(shots, narrations)):
+                        scenes_list.append({
+                            "scene_number": i + 1,
+                            "narration": narration,
+                            "subtitle_text": " ".join(narration.split()[:4]).upper(),
+                            "sfx": "whoosh" if i else "impact",
+                            "transition_type": "whip_pan",
+                        })
+                    script_text = custom_script
+                    title = topic_title
+                else:
+                    script_data = generate_video_content(
+                        topic_title,
+                        node_data.get('custom_prompt', ''),
+                        model_name=ai_model,
+                        custom_api_key=custom_api_key,
+                        shorts_length=max(30, int(round(total_dur))),
+                        visual_style=visual_style,
+                        scene_count_override=len(shots),
+                        scene_durations=shot_durations,
+                    )
+                    scenes_list = (script_data.get('scenes') if script_data else []) or []
+                    if not scenes_list:
+                        raise RuntimeError(
+                            "clone-short: script generation returned no scenes.")
+                    script_text = script_data.get('script', '')
+                    title = script_data.get('title', topic_title)
+
+                # Map scenes 1:1 onto reference shots. If the model returned
+                # more/fewer scenes than shots, stretch or trim to fit —
+                # the reference timing always wins.
+                final_scenes = []
+                for i, shot in enumerate(shots):
+                    sc = dict(scenes_list[i]) if i < len(scenes_list) else dict(scenes_list[-1])
+                    sc["scene_number"] = i + 1
+                    sc["duration"] = shot["duration"]
+                    # Clone mode: reference timing wins over the 10s minimum.
+                    sc["exact_duration"] = True
+                    sc["reference_shot"] = {
+                        "index": shot["index"],
+                        "camera_move": shot["camera_move"],
+                        "palette": shot["palette"],
+                        "mood": shot["mood"],
+                    }
+                    # Composition hint: appended to the image prompt by
+                    # _ensure_script_chain (image-gen node), so it survives
+                    # prompt gap-filling in both script modes.
+                    if shot.get("composition_hint"):
+                        sc["composition_hint"] = shot["composition_hint"]
+                    # Literal copy of the reference camera move.
+                    sc["image_to_video_prompt"] = shot["motion_prompt"]
+                    final_scenes.append(sc)
+
+                result = {
+                    "status": "success",
+                    "node_type": node_type,
+                    "topic": topic_title,
+                    "topic_title": topic_title,
+                    "title": title,
+                    "script": script_text,
+                    "scenes": final_scenes,
+                    "shot_plan": [
+                        {"index": s["index"], "duration": s["duration"],
+                         "camera_move": s["camera_move"],
+                         "palette": s["palette"]}
+                        for s in shots
+                    ],
+                    "reference_url": reference_url,
+                    "reference_duration": plan["duration"],
+                }
+
             elif node_type in ['image-gen', 'visuals', 'gen-image']:
                 from src.backend.image_gen import generate_images_for_scenes
                 

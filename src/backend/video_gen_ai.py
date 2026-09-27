@@ -14,7 +14,7 @@ from PIL import Image, ImageFilter, ImageEnhance
 # ever comes out as a stubby 3-4s loop.
 MIN_SHOT_SECONDS = 10.0
 
-def generate_video_from_image(image_path: str, prompt: str, duration: float = 10.0, provider: str = "Luma", api_key: str = "", output_dir: str = "C:\\AI_project\\output") -> str:
+def generate_video_from_image(image_path: str, prompt: str, duration: float = 10.0, provider: str = "Luma", api_key: str = "", output_dir: str = "C:\\AI_project\\output", enforce_min: bool = True) -> str:
     """
     Triggers AI Image-to-Video generation. 
     Implements a self-healing fallback queue:
@@ -23,9 +23,13 @@ def generate_video_from_image(image_path: str, prompt: str, duration: float = 10
        which synthesizes 10+ dynamic camera physics effects directly matching the prompt.
 
     Every generated clip is at least MIN_SHOT_SECONDS long — short
-    scene timings never produce stubby 3-4s videos.
+    scene timings never produce stubby 3-4s videos. Clone mode
+    (clone-short node) sets enforce_min=False so the reference's exact
+    shot timing is preserved frame-for-frame.
     """
-    duration = max(MIN_SHOT_SECONDS, float(duration or MIN_SHOT_SECONDS))
+    duration = float(duration or MIN_SHOT_SECONDS)
+    if enforce_min:
+        duration = max(MIN_SHOT_SECONDS, duration)
     os.makedirs(output_dir, exist_ok=True)
     import re
     clean_p = re.sub(r'[^a-zA-Z0-9_]', '_', provider.lower()).strip('_')
@@ -1189,9 +1193,12 @@ def generate_videos_for_scenes(
         scene['video_paths'] = []
         if img_paths:
             # Every shot is at least MIN_SHOT_SECONDS long — a 3s scene
-            # timing never produces a stubby 3s video.
-            shot_dur = max(MIN_SHOT_SECONDS,
-                           scene_dur / max(1, len(img_paths)))
+            # timing never produces a stubby 3s video. Clone mode
+            # (exact_duration) keeps the reference's exact shot timing.
+            exact = bool(scene.get('exact_duration'))
+            shot_dur = (scene_dur / max(1, len(img_paths)) if exact
+                        else max(MIN_SHOT_SECONDS,
+                                 scene_dur / max(1, len(img_paths))))
             for j, img_path in enumerate(img_paths):
                 if os.path.exists(img_path):
                     v_path = generate_video_from_image(
@@ -1200,7 +1207,8 @@ def generate_videos_for_scenes(
                         duration=shot_dur,
                         provider=provider,
                         api_key=api_key,
-                        output_dir=output_dir
+                        output_dir=output_dir,
+                        enforce_min=not exact,
                     )
                     if v_path and os.path.exists(v_path):
                         scene['video_paths'].append(v_path)

@@ -821,6 +821,49 @@ def api_clips_status(job_id):
     return jsonify({"status": "success", "job": job})
 
 
+# ── Reference-clone: analyze a YouTube Short's shot plan ───────────────────
+_clone_jobs = {}
+_clone_lock = threading.Lock()
+
+
+@app.route('/api/clone/analyze', methods=['POST'])
+@login_required
+def api_clone_analyze():
+    """Analyze a YouTube Short frame-by-frame: shots, durations, camera
+    moves, palette per shot. Background job; poll /api/clone/status/<id>."""
+    data = request.get_json() or {}
+    url = (data.get('url') or data.get('reference_url') or '').strip()
+    if not url:
+        return jsonify({"status": "error", "message": "Provide a 'url'."}), 400
+    job_id = "clone-" + datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+    work_dir = os.path.join("data", "reference_clone", job_id)
+    with _clone_lock:
+        _clone_jobs[job_id] = {"status": "running", "result": None, "error": None}
+
+    def _run():
+        try:
+            from src.backend.reference_clone import analyze_reference
+            plan = analyze_reference(url, work_dir)
+            with _clone_lock:
+                _clone_jobs[job_id] = {"status": "done", "result": plan, "error": None}
+        except Exception as e:
+            with _clone_lock:
+                _clone_jobs[job_id] = {"status": "error", "result": None, "error": str(e)}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "queued", "job_id": job_id})
+
+
+@app.route('/api/clone/status/<job_id>')
+@login_required
+def api_clone_status(job_id):
+    with _clone_lock:
+        job = _clone_jobs.get(job_id)
+    if not job:
+        return jsonify({"status": "error", "message": "Unknown job id."}), 404
+    return jsonify({"status": "success", "job": job})
+
+
 # ── Free-web background agent: providers, candidates, jobs ─────────────────
 @app.route('/api/free/providers', methods=['GET'])
 @login_required

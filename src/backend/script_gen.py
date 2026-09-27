@@ -537,7 +537,8 @@ def _validate_and_repair_scenes(raw_scenes: list, topic_title: str, visual_style
 
 def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", custom_api_key="",
                            shorts_length=35, visual_style="cinema_8k",
-                           article_url="", article_summary="", topic_context=""):
+                           article_url="", article_summary="", topic_context="",
+                           scene_count_override=None, scene_durations=None):
     """
     Generates a full, high-retention transcript first, then derives scene-specific image prompts,
     img-to-video motion prompts, sound design, and subtitle overlays.
@@ -564,7 +565,23 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
     # Word count: 2.5 words per second = ~80-110 words for 30-40s
     word_count_min = max(75, int(target_length * 2.3))
     word_count_max = max(95, int(target_length * 2.8))
-    scene_count_target = max(6, int(target_length / 4.5))
+    # Clone mode: the caller dictates the exact scene count (one scene per
+    # reference shot) and each scene's exact duration.
+    clone_mode = bool(scene_count_override)
+    scene_count_target = int(scene_count_override) if clone_mode else max(6, int(target_length / 4.5))
+    if clone_mode and scene_durations:
+        target_length = int(round(sum(scene_durations)))
+        word_count_min = max(20, int(target_length * 2.3))
+        word_count_max = max(30, int(target_length * 2.8))
+        per_scene_rule = ("- Scene count is EXACTLY "
+                          f"{scene_count_target} — one scene per reference shot, no more, no less.\n"
+                          + "".join(
+                              f"- Scene {i + 1}: narration ~{max(6, int(d * 2.5))} words, "
+                              f"duration EXACTLY {d:.1f} seconds.\n"
+                              for i, d in enumerate(scene_durations)))
+    else:
+        per_scene_rule = (f"- Total Scenes: {scene_count_target} scenes. "
+                          f"Each scene duration between 4.0 and 5.5 seconds.\n")
 
     system_prompt = (
         f"You are an award-winning cinematic director and viral storytelling expert (MagnatesMedia & Vox style).\n"
@@ -574,7 +591,7 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
         f"STRICT DURATION & WORD COUNT RULES:\n"
         f"- Target Duration: {target_length} SECONDS (MUST BE AT LEAST 30 SECONDS).\n"
         f"- Total Spoken Words: Between {word_count_min} and {word_count_max} words.\n"
-        f"- Total Scenes: {scene_count_target} scenes. Each scene duration between 4.0 and 5.5 seconds.\n\n"
+        f"{per_scene_rule}\n"
         f"MANDATORY ARCHITECTURE — TITLE SCENE & CONNECTING SCENES:\n"
         f"1. SCENE 1 (THE TITLE HERO SCENE):\n"
         f"   - Must serve as the Title Visual Hook. Its 'image_prompt' must be a jaw-dropping, iconic visual embodiment of the Topic Title: '{topic_title}'.\n"
