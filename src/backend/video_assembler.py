@@ -32,6 +32,27 @@ def _esc_ass_text(text: str) -> str:
     return text.replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
+_NB_HYPHEN = "‑"  # U+2011 non-breaking hyphen
+
+# At Arial Bold 72 on a 1080px frame with 80px side margins, ~20 uppercase
+# characters fit on one line. Fixed 5-word chunks overflowed, and libass
+# WrapStyle 0 then broke hyphenated compounds mid-word ("LIVE-ACTION" ->
+# "LIVE" / "-ACTION"). Lines are chunked to fit instead.
+_MAX_LINE_CHARS = 20
+_MAX_CHUNK_WORDS = 6
+
+
+def _sanitize_caption_word(word: str) -> str:
+    """Escape ASS control chars and keep hyphenated compounds on one line.
+
+    libass smart-wrapping breaks "LIVE-ACTION" into "LIVE" / "-ACTION" with a
+    dangling hyphen. A non-breaking hyphen between alphanumerics stops the
+    break without changing how the word reads.
+    """
+    w = _esc_ass_text(word)
+    return re.sub(r"(?<=[A-Za-z0-9])-(?=[A-Za-z0-9])", _NB_HYPHEN, w)
+
+
 def _ffmpeg_bin() -> str:
     """Resolve an ffmpeg binary: system PATH first, else imageio-ffmpeg's."""
     import shutil
@@ -58,11 +79,32 @@ def build_caption_ass(caption_events: list, ass_path: str,
     for (words, _w_idx, w_start, w_end) in caption_events:
         w = words[_w_idx] if 0 <= _w_idx < len(words) else ""
         if w:
-            flat.append((_esc_ass_text(str(w)), float(w_start), float(w_end)))
+            flat.append((_sanitize_caption_word(str(w)), float(w_start), float(w_end)))
     if not flat:
         return None
 
-    chunks = [flat[i:i + 5] for i in range(0, len(flat), 5)]
+    # Word timings (especially faster-whisper's) can overlap slightly at the
+    # edges. Two overlapping karaoke Dialogues render as stacked duplicate
+    # lines, so clamp every word's end to the next word's start.
+    for i in range(len(flat) - 1):
+        w, s, e = flat[i]
+        ns = flat[i + 1][1]
+        if e > ns - 0.01:
+            flat[i] = (w, s, max(s + 0.01, ns - 0.01))
+
+    # Width-aware line chunking so every line fits the frame (no halfway-cut
+    # text, no mid-word hyphen breaks).
+    chunks, cur, cur_len = [], [], 0
+    for w, s, e in flat:
+        need = len(w) + (1 if cur else 0)  # +1 for the joining space
+        if cur and (cur_len + need > _MAX_LINE_CHARS or len(cur) >= _MAX_CHUNK_WORDS):
+            chunks.append(cur)
+            cur, cur_len = [], 0
+            need = len(w)
+        cur.append((w, s, e))
+        cur_len += need
+    if cur:
+        chunks.append(cur)
     header = (
         "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n"
         "WrapStyle: 0\nScaledBorderAndShadow: yes\n\n"
@@ -83,7 +125,12 @@ def build_caption_ass(caption_events: list, ass_path: str,
         line_words = [w for w, _s, _e in chunk]
         for j, (word, start, end) in enumerate(chunk):
             if end <= start:
+                # Minimal visible flash, but never past the next word's start
+                # (overlapping karaoke events stack into duplicate lines).
+                nxt = chunk[j + 1][1] if j + 1 < len(chunk) else None
                 end = start + 0.08
+                if nxt is not None and end > nxt - 0.01:
+                    end = max(start + 0.01, nxt - 0.01)
             parts = []
             for k, lw in enumerate(line_words):
                 if k == j:
