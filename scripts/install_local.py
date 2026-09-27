@@ -51,6 +51,22 @@ def step(title):
     log(f"=== {title} ===")
 
 
+def _hf_model_cached(repo_id: str) -> bool:
+    """True when a HuggingFace Hub snapshot of repo_id is already cached."""
+    hub_root = os.environ.get("HF_HOME", os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub"))
+    cache_dir = os.path.join(hub_root, "models--" + repo_id.replace("/", "--"), "snapshots")
+    try:
+        if not os.path.isdir(cache_dir):
+            return False
+        for snap in os.listdir(cache_dir):
+            snap_path = os.path.join(cache_dir, snap)
+            if os.path.isdir(snap_path) and os.listdir(snap_path):
+                return True
+    except OSError:
+        pass
+    return False
+
+
 def main():
     log("AGAM AI Studio — local setup")
     log(f"Python {platform.python_version()} on {platform.system()} {platform.machine()}")
@@ -119,17 +135,20 @@ def main():
 
     # 3b. Pre-download the model so the first render isn't slow -----------
     step("3b/6 Pre-downloading the OmniVoice model (~a few GB, one time)")
-    dl_code = (
-        "from huggingface_hub import snapshot_download;"
-        "snapshot_download('k2-fsa/OmniVoice');"
-        "print('model cached')"
-    )
-    rc = run([sys.executable, "-c", dl_code])
-    if rc == 0:
-        log(f"{PASS} model cached.")
+    if _hf_model_cached("k2-fsa/OmniVoice"):
+        log(f"{PASS} model already cached — skipping download.")
     else:
-        log(f"{SKIP} model pre-download failed (it will download on first "
-            "TTS use instead — needs internet + HF access).")
+        dl_code = (
+            "from huggingface_hub import snapshot_download;"
+            "snapshot_download('k2-fsa/OmniVoice');"
+            "print('model cached')"
+        )
+        rc = run([sys.executable, "-c", dl_code])
+        if rc == 0:
+            log(f"{PASS} model cached.")
+        else:
+            log(f"{SKIP} model pre-download failed (it will download on first "
+                "TTS use instead — needs internet + HF access).")
 
     # 4. ffmpeg ------------------------------------------------------------
     step("4/6  ffmpeg (audio/video conversion)")
@@ -151,18 +170,21 @@ def main():
         log("  To get Ruflo later: install Node.js LTS from https://nodejs.org, "
             "then re-run this script (or: npm install -g ruflo@latest).")
     else:
-        log("Installing Ruflo (npm `ruflo@latest` — official dist of ruvnet/ruflo)...")
-        npm_cmd = ["npm", "install", "-g", "ruflo@latest"]
-        rc = run(npm_cmd)
-        if rc != 0 and not IS_WINDOWS:
-            log("  Retrying with sudo (npm global dir not writable)...")
-            rc = run(["sudo", *npm_cmd])
         if shutil.which("ruflo"):
-            run(["ruflo", "--version"])
-            log(f"{PASS} Ruflo installed. Scaffold it in this project with:")
-            log(f"  cd {REPO_ROOT} && npx ruflo@latest init")
+            log(f"{PASS} Ruflo already installed — skipping.")
         else:
-            log(f"{FAIL} Ruflo install failed — try manually: npm install -g ruflo@latest")
+            log("Installing Ruflo (npm `ruflo@latest` — official dist of ruvnet/ruflo)...")
+            npm_cmd = ["npm", "install", "-g", "ruflo@latest"]
+            rc = run(npm_cmd)
+            if rc != 0 and not IS_WINDOWS:
+                log("  Retrying with sudo (npm global dir not writable)...")
+                rc = run(["sudo", *npm_cmd])
+            if shutil.which("ruflo"):
+                run(["ruflo", "--version"])
+                log(f"{PASS} Ruflo installed. Scaffold it in this project with:")
+                log(f"  cd {REPO_ROOT} && npx ruflo@latest init")
+            else:
+                log(f"{FAIL} Ruflo install failed — try manually: npm install -g ruflo@latest")
 
     # 6. Summary ------------------------------------------------------------
     step("6/6  Summary")
