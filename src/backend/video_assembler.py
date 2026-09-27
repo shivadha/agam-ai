@@ -358,14 +358,142 @@ def create_advanced_motion_effect(image_path, duration, width, height, effect_ty
         return clip
 
 
-def prepare_video_shot(video_path, duration, width, height, fallback_image=None):
+def _dynamic_tail_clip(frame_array, tail_dur, width, height, motion_prompt=""):
+    """Render a genuinely animated tail from a single frame (in-memory).
+
+    A short AI clip (e.g. 1-3s from ComfyUI/SVD) plays once; the rest of the
+    shot is filled with animated footage rendered from its last frame:
+    2.5D parallax (blurred background drifts less than the sharp subject),
+    continuous zoom + sinusoidal camera drift, a drifting particle field,
+    a slow diagonal light sweep, film grain and vignette.
+
+    This replaced the old plain slow-zoom tail — a 32% zoom stretched over
+    ~8s reads as a still image on a phone (user report 2026-09-27:
+    "image to video was not animated"). Fully numpy/PIL, no temp files
+    (Windows-safe: nothing on disk for the final render to depend on).
+    """
+    from moviepy import VideoClip
+    from PIL import Image as _PILImage, ImageFilter as _PILFilter
+    import numpy as np
+    import math
+
+    frame_array = np.asarray(frame_array, dtype=np.uint8)
+    fh0, fw0 = frame_array.shape[:2]
+    base_pil = _PILImage.fromarray(frame_array).convert("RGB")
+
+    # Oversized canvas so the camera always has room to roam
+    cw, ch = width + 240, height + 240
+    src_ratio = fw0 / max(1, fh0)
+    if src_ratio > cw / ch:
+        sw, sh = int(ch * src_ratio), ch
+    else:
+        sw, sh = cw, int(cw / src_ratio)
+    big_pil = base_pil.resize((sw, sh), _PILImage.Resampling.LANCZOS)
+    W, H = sw, sh
+    fg = np.asarray(big_pil).astype(np.float32) / 255.0
+    bg = np.asarray(big_pil.filter(_PILFilter.GaussianBlur(24))).astype(np.float32) / 255.0
+    bg *= 0.62  # darker far layer -> depth
+
+    # Feathered elliptical subject mask (at output resolution — the camera
+    # roams beneath it, which reads as depth)
+    my, mx = np.ogrid[:height, :width]
+    ex = (mx - width / 2) / (width * 0.40)
+    ey = (my - height / 2) / (height * 0.44)
+    dist = np.sqrt(ex * ex + ey * ey)
+    mask = np.clip(1.0 - (dist - 0.72) / 0.38, 0, 1).astype(np.float32)
+    mask = np.asarray(_PILImage.fromarray((mask * 255).astype(np.uint8))
+                      .filter(_PILFilter.GaussianBlur(40))).astype(np.float32) / 255.0
+    mask3 = mask[:, :, None]
+
+    # Static vignette at OUTPUT resolution
+    oy, ox = np.ogrid[:height, :width]
+    vx = (ox - width / 2) / (width / 2)
+    vy = (oy - height / 2) / (height / 2)
+    vr = np.sqrt(vx * vx + vy * vy) / np.sqrt(2.0)
+    vignette3 = (1.0 - 0.30 * np.clip(vr - 0.55, 0, 1) ** 1.6).astype(np.float32)[:, :, None]
+
+    # Particle field (prompt-keyed tint), fully vectorized
+    pl = (motion_prompt or "").lower()
+    if any(k in pl for k in ["fire", "ember", "explosion", "battle", "spark", "lava"]):
+        p_tint = np.array([1.0, 0.45, 0.12], np.float32)
+    elif any(k in pl for k in ["rain", "storm", "ocean", "water"]):
+        p_tint = np.array([0.55, 0.70, 1.00], np.float32)
+    elif any(k in pl for k in ["snow", "winter", "cold"]):
+        p_tint = np.array([0.90, 0.95, 1.00], np.float32)
+    elif any(k in pl for k in ["neon", "city", "night", "club", "lights"]):
+        p_tint = np.array([1.00, 0.85, 0.40], np.float32)
+    else:
+        p_tint = np.array([1.00, 0.95, 0.80], np.float32)
+    rng = np.random.default_rng(abs(hash(pl)) % (2 ** 32) if pl else 1234)
+    pn = 60
+    pw4, ph4 = width // 4, height // 4
+    px0 = rng.uniform(0, pw4, pn)
+    py0 = rng.uniform(0, ph4, pn)
+    pvx = rng.uniform(-9, 9, pn)
+    pvy = rng.uniform(-11, 5, pn)
+    pa = rng.uniform(0.25, 0.7, pn).astype(np.float32)
+    pph = rng.uniform(0, 2 * math.pi, pn)
+
+    def _sample(layer, zoom, cx, cy, damp):
+        dcx = W / 2 + (cx - W / 2) * damp
+        dcy = H / 2 + (cy - H / 2) * damp
+        crop_w, crop_h = W / zoom, H / zoom
+        x1 = float(max(0, min(W - crop_w, dcx - crop_w / 2)))
+        y1 = float(max(0, min(H - crop_h, dcy - crop_h / 2)))
+        ys = (y1 + np.arange(height) * (crop_h / height)).astype(np.int32).clip(0, H - 1)
+        xs = (x1 + np.arange(width) * (crop_w / width)).astype(np.int32).clip(0, W - 1)
+        return layer[ys[:, None], xs[None, :]]
+
+    def make_frame(t):
+        p = min(max(t / max(tail_dur, 0.01), 0.0), 1.0)
+        # Continuous push-in + sinusoidal drift: the camera never sits still
+        zoom = 1.0 + 0.30 * p
+        cx = W / 2 + math.sin(p * math.pi * 2.0) * (W * 0.035)
+        cy = H / 2 + (p - 0.5) * (H * 0.06)
+
+        far = _sample(bg, zoom * 0.985, cx, cy, 0.4)
+        near = _sample(fg, zoom, cx, cy, 1.0)
+        frame = far * (1.0 - mask3) + near * mask3
+
+        # Particles (quarter-res, screen blend)
+        qx = ((px0 + pvx * t) % pw4).astype(np.int64)
+        qy = ((py0 + pvy * t) % ph4).astype(np.int64)
+        pmap = np.zeros((ph4, pw4), np.float32)
+        flick = (0.6 + 0.4 * np.sin(t * 3.0 + pph)).astype(np.float32)
+        np.add.at(pmap, (qy, qx), pa * flick)
+        pmap = np.asarray(_PILImage.fromarray(
+            (np.clip(pmap, 0, 1) * 255).astype(np.uint8)
+        ).filter(_PILFilter.GaussianBlur(1.5))).astype(np.float32) / 255.0
+        pmap = np.asarray(_PILImage.fromarray(
+            (pmap * 255).astype(np.uint8)
+        ).resize((width, height), _PILImage.Resampling.BILINEAR)).astype(np.float32) / 255.0
+        part = pmap[:, :, None] * p_tint[None, None, :]
+        frame = 1.0 - (1.0 - frame) * (1.0 - np.clip(part * 0.75, 0, 1))
+
+        # Slow diagonal light sweep
+        sweep_pos = p * 1.6 - 0.3
+        band = np.exp(-((ox / width + oy / height) / 2.0 - sweep_pos) ** 2 / 0.004)
+        frame = 1.0 - (1.0 - frame) * (1.0 - np.clip(band[:, :, None] * 0.16, 0, 1))
+
+        # Grade: vignette + animated grain
+        frame *= vignette3
+        grain = (np.random.rand(height, width, 1).astype(np.float32) - 0.5) * 0.06
+        frame = np.clip(frame + grain, 0, 1)
+        return (frame * 255).astype(np.uint8)
+
+    return VideoClip(make_frame, duration=tail_dur)
+
+
+def prepare_video_shot(video_path, duration, width, height, fallback_image=None,
+                       motion_prompt=""):
     """
     Loads an AI-generated video file, scales and crops it to vertical 9:16 aspect ratio.
 
-    A short AI clip is played ONCE, then the shot continues with a slow Ken
-    Burns drift on the clip's final frame. (The old vfx.Loop fill made a 1s
-    clip visibly snap back and repeat for the whole shot — "animated for a
-    second then repeats".)
+    A short AI clip is played ONCE, then the shot continues with a richly
+    animated tail rendered from the clip's final frame (2.5D parallax,
+    drifting particles, light sweep, grain) — never a loop, never a still.
+    (The old vfx.Loop fill made a 1s clip visibly snap back and repeat;
+    the plain slow-zoom tail that replaced it read as a frozen image.)
 
     If the video cannot be loaded, the scene's image is animated with a
     motion effect instead — NEVER a black screen.
@@ -401,26 +529,19 @@ def prepare_video_shot(video_path, duration, width, height, fallback_image=None)
     if clip.duration >= duration:
         return clip.subclipped(0, duration)
 
-    # Short clip: play it once, then drift on its last frame — never loop.
+    # Short clip: play it once, then continue with a RICH animated tail
+    # rendered from its last frame (parallax + particles + light sweep +
+    # grain). Never loop (the old vfx.Loop snapped back every second) and
+    # never a plain slow zoom (reads as a still image on a phone).
     tail_dur = duration - clip.duration
     try:
-        import tempfile
-        from PIL import Image as _PILImage
         last = clip.get_frame(max(0.0, clip.duration - 0.05))
-        fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="tailframe_")
-        os.close(fd)
-        _PILImage.fromarray(last).save(tmp_path)
-        try:
-            tail = create_advanced_motion_effect(tmp_path, tail_dur, width, height, "zoom_in")
-            head = clip.without_audio() if hasattr(clip, "without_audio") else clip
-            full = concatenate_videoclips([head, tail], method="compose").with_duration(duration)
-        finally:
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
+        tail = _dynamic_tail_clip(last, tail_dur, width, height,
+                                  motion_prompt=motion_prompt)
+        head = clip.without_audio() if hasattr(clip, "without_audio") else clip
+        full = concatenate_videoclips([head, tail], method="compose").with_duration(duration)
         print(f"[video_assembler] Short AI clip ({clip.duration:.2f}s) plays once + "
-              f"{tail_dur:.2f}s drift tail (no loop).")
+              f"{tail_dur:.2f}s animated tail (no loop).")
         return full
     except Exception as e:
         # Last resort: fall back to the scene image (exact duration) rather
@@ -428,8 +549,8 @@ def prepare_video_shot(video_path, duration, width, height, fallback_image=None)
         # content shorter than the audio, and with_duration() then pads the
         # tail with BLACK frames ("video stops, blank screen with music").
         # (2026-09-27 loop-test root cause of the 52s->30s+blank symptom.)
-        print(f"[video_assembler] Tail-drift note ({e}); using scene image (exact duration).")
-        return _image_fallback(f"Tail-drift failed for {video_path}")
+        print(f"[video_assembler] Animated-tail note ({e}); using scene image (exact duration).")
+        return _image_fallback(f"Animated tail failed for {video_path}")
 
 
 def add_custom_transitions(clips, scenes, width, height):
@@ -859,7 +980,9 @@ def assemble_cinematic_video(
             fb_img = (img_paths or [None])[0]
             for shot_idx, video_path in enumerate(video_paths):
                 vc = prepare_video_shot(video_path, shot_duration, 1080, 1920,
-                                        fallback_image=fb_img)
+                                        fallback_image=fb_img,
+                                        motion_prompt=(scene.get("image_to_video_prompt")
+                                                       or scene.get("narration") or ""))
                 video_clips.append(vc)
                 if shot_idx > 0 or idx > 0:
                     boundary_times.append(current_time)

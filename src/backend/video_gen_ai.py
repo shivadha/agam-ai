@@ -192,6 +192,19 @@ def generate_video_from_image(image_path: str, prompt: str, duration: float = 9.
 # LTX model: https://huggingface.co/Lightricks/LTX-Video
 # ══════════════════════════════════════════════════════════════
 
+def _svd_frame_plan(svd_model: str) -> tuple:
+    """How many frames / what fps the ComfyUI SVD branch should produce.
+
+    SVD-XT checkpoints generate 25 frames; base SVD only 14. The playback fps
+    matches the conditioning fps (7) so the motion plays at natural speed.
+    (2026-09-27: the old plan — 14 frames @ 14fps = a 1.0s clip — was the
+    "image-to-video only generates 1-2 seconds" user complaint. 25f @ 7fps
+    gives ~3.6s of genuine AI motion per shot.)
+    """
+    frames = 25 if "xt" in (svd_model or "").lower() else 14
+    return frames, 7
+
+
 def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
                           output_path: str, base_url: str = "http://127.0.0.1:8188") -> str:
     """
@@ -301,7 +314,7 @@ def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
         except Exception:
             pass
 
-        frames_count = 14  # 14 frames for clean motion and maximum speed
+        frames_count, svd_fps = _svd_frame_plan(svd_model)
         workflow = {
             "1": {"class_type": "LoadImage", "inputs": {"image": uploaded_name}},
             "2": {"class_type": "ImageOnlyCheckpointLoader", "inputs": {"ckpt_name": svd_model}},
@@ -335,13 +348,15 @@ def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
             "6": {"class_type": "SaveAnimatedWEBP", "inputs": {
                 "images": ["5", 0],
                 "filename_prefix": "pulseforge_svd",
-                "fps": 14.0,
+                # Match the conditioning fps (7) so motion plays at natural
+                # speed: 25f -> ~3.6s, 14f -> 2.0s of real AI motion.
+                "fps": float(svd_fps),
                 "lossless": False,
                 "quality": 85,
                 "method": "default"
             }}
         }
-        print(f"[ComfyUI] Using Stable Video Diffusion model: {svd_model} ({svd_w}x{svd_h}, {frames_count} frames, 14 steps)")
+        print(f"[ComfyUI] Using Stable Video Diffusion model: {svd_model} ({svd_w}x{svd_h}, {frames_count} frames @ {svd_fps}fps, 14 steps)")
     elif wan_model:
         workflow = {
             "1": {"class_type": "LoadImage", "inputs": {"image": uploaded_name}},
@@ -456,7 +471,10 @@ def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
                                     with PilImg.open(tmp_in) as anim_img:
                                         frames = [np.array(frame.convert("RGB")) for frame in PilSeq.Iterator(anim_img)]
                                     if frames:
-                                        imageio.mimsave(output_path, frames, fps=14, codec="libx264")
+                                        # webp output only comes from the SVD branch:
+                                        # keep _svd_frame_plan's fps so motion
+                                        # plays at natural speed (25f -> ~3.6s).
+                                        imageio.mimsave(output_path, frames, fps=7, codec="libx264")
                                         print(f"[ComfyUI] Successfully converted {len(frames)} frames to MP4 via imageio: {output_path}")
                                 except Exception as conv_err:
                                     print(f"[ComfyUI] imageio conversion notice: {conv_err} — trying ffmpeg fallback")
