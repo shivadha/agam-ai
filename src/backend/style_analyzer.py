@@ -127,8 +127,8 @@ def analyze_short(url_or_path, work_dir=None, progress_cb=None):
         speech = sum(max(0.0, w.get("end", 0) - w.get("start", 0)) for w in words)
         profile["audio"]["speech_ratio"] = round(
             min(1.0, speech / max(duration, 0.1)), 3)
-        profile["audio"]["music_bed"] = _safe(
-            lambda: _detect_music_bed(local_path, words), False)
+    profile["audio"]["music_bed"] = _safe(
+        lambda: _detect_music_bed(local_path, words, duration=duration), False)
 
     # -- edit decision list: map transcript words onto shots -----------------
     _prog("building edit decision list")
@@ -156,7 +156,7 @@ def _detect_shots(path, duration):
     cuts = []
     proc = subprocess.run(
         [_ffmpeg(), "-hide_banner", "-i", path, "-vf",
-         "select='gt(scene\\,0.35)',showinfo",
+         "select='gt(scene\\,0.15)',showinfo",
          "-vsync", "0", "-f", "null", "-"],
         capture_output=True, text=True, timeout=300)
     for m in re.finditer(r"pts_time:([0-9.]+)", proc.stderr or ""):
@@ -210,7 +210,9 @@ def _zoom_intensity(path, shot):
             return 0.0
         import numpy as np
         arr0 = np.asarray(f0, dtype=np.float32)
-        s, _score = rc._best_zoom(arr0, f1)
+        s, _score, _s1 = rc._best_zoom(arr0, f1)
+        if not rc._zoom_trustworthy(_score, _s1):
+            return 0.0  # flat profile: would invent a phantom zoom
         per_sec = (1.0 / s - 1.0) / 0.33
         if abs(per_sec) < 0.06:  # deadband: not a real zoom
             return 0.0
@@ -282,13 +284,18 @@ def _caption_zone_mser(path):
 
 
 def _caption_zone_numpy(path, n=6, width=320):
-    """cv2-free fallback: bright-pixel bands (white bold captions pop)."""
+    """cv2-free fallback: text rows = bright pixels AND dense edges.
+
+    Bold white captions are bright *and* edgy (glyph outlines); plain
+    bright backgrounds (sky, test patterns) are bright but smooth, so
+    requiring both kills false positives on busy footage.
+    """
     import numpy as np
     try:
-        from PIL import Image
+        from PIL import Image  # noqa: F401
     except ImportError:
         return False, None, 0.0
-    band_hits = {"top": [], "middle": [], "bottom": []}
+    zone_run = {"top": 0.0, "middle": 0.0, "bottom": 0.0}
     rel_heights = []
     H = 0
     for i in range(n):
@@ -296,26 +303,26 @@ def _caption_zone_numpy(path, n=6, width=320):
         if frame is None:
             continue
         arr = np.asarray(frame.convert("L"), dtype=np.float32)
-        H, W = arr.shape
+        H = arr.shape[0]
         bright = arr > 200
-        thirds = [("top", bright[:H // 3]), ("middle", bright[H // 3:2 * H // 3]),
-                  ("bottom", bright[2 * H // 3:])]
-        for name, band in thirds:
-            band_hits[name].append(band.mean())
-        # rel_height: contiguous bright rows inside the hottest band
-        hot = max(thirds, key=lambda t: t[1].mean())
-        rows = hot[1].mean(axis=1) > 0.02
-        if rows.any():
-            ys = np.where(rows)[0]
-            # caption block = rows within the band
-            rel_heights.append(float(ys.max() - ys.min() + 1) / H)
+        edge = np.abs(np.diff(arr, axis=1)) > 40
+        edge = np.pad(edge, ((0, 0), (0, 1)), mode="constant")
+        score = bright.mean(axis=1) * edge.mean(axis=1)
+        idx = np.where(score > 0.03)[0]
+        if len(idx) == 0:
+            continue
+        for run in np.split(idx, np.where(np.diff(idx) > 2)[0] + 1):
+            if len(run) < 6:
+                continue
+            center = float(run.mean()) / H
+            zone = "top" if center < 1 / 3 else (
+                "bottom" if center > 2 / 3 else "middle")
+            zone_run[zone] += len(run)
+            rel_heights.append(len(run) / H)
     if not H:
         return False, None, 0.0
-    avg = {k: float(sum(v) / max(len(v), 1)) for k, v in band_hits.items()}
-    best = max(avg, key=avg.get)
-    # present only if the hottest band clearly beats the coldest
-    coldest = min(avg.values())
-    present = avg[best] > 0.004 and avg[best] > 2.5 * max(coldest, 1e-6)
+    best = max(zone_run, key=zone_run.get)
+    present = zone_run[best] >= 10
     rel_h = float(statistics.median(rel_heights)) if rel_heights and present else 0.0
     return present, (best if present else None), round(min(rel_h, 0.5), 3)
 
@@ -409,8 +416,12 @@ def _audio_rms(path, start, end):
         return 0.0
 
 
-def _detect_music_bed(path, words, min_gap=1.0):
-    """True when non-speech segments still carry audible energy (music bed)."""
+def _detect_music_bed(path, words, min_gap=1.0, duration=0.0):
+    """True when non-speech segments still carry audible energy (music bed).
+
+    With no transcript (no words), the whole track is treated as one gap,
+    so a music-only short still reports its bed.
+    """
     gaps = []
     prev_end = 0.0
     for w in words:
@@ -418,6 +429,8 @@ def _detect_music_bed(path, words, min_gap=1.0):
         if s - prev_end >= min_gap:
             gaps.append((prev_end, s))
         prev_end = max(prev_end, float(w.get("end", s)))
+    if not gaps and duration > min_gap:
+        gaps.append((0.0, duration))
     if not gaps:
         return False
     rms_vals = [_audio_rms(path, a, min(b, a + 4.0)) for a, b in gaps[:4]]
@@ -467,7 +480,11 @@ def _style_thumbs(path, shots, work_dir, max_thumbs=4):
                  "-vf", "scale=320:-1", "-q:v", "5", out],
                 capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
             if proc.returncode == 0 and os.path.exists(out):
-                thumbs.append(os.path.relpath(out, OUTPUT_DIR).replace("\\", "/"))
+                rel = os.path.relpath(out, OUTPUT_DIR).replace("\\", "/")
+                # work_dir may live outside OUTPUT_DIR (adhoc analysis):
+                # a "../../.." path is useless to the frontend, so fall back
+                # to the absolute path instead of garbage.
+                thumbs.append(out if rel.startswith("..") else rel)
         except Exception:
             continue
     return thumbs

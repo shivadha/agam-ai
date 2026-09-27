@@ -249,6 +249,33 @@ def _thumb_b64(pil_img, width=160):
 # 5. camera-motion estimation (numpy phase correlation + zoom search)
 # ---------------------------------------------------------------------------
 
+def _profile_shift(pa, pb):
+    """1D shift of pb relative to pa via profile correlation (pixels).
+
+    Positive = content moved right/down. Returns 0.0 when the profiles
+    are flat or the match is weak.
+    """
+    import numpy as np
+    pa = np.asarray(pa, dtype=np.float64)
+    pb = np.asarray(pb, dtype=np.float64)
+    if pa.std() < 1e-6 or pb.std() < 1e-6:
+        return 0.0
+    pa -= pa.mean()
+    pb -= pb.mean()
+    corr = np.correlate(pb, pa, mode="full")
+    norm = float(np.sqrt((pa ** 2).sum() * (pb ** 2).sum())) + 1e-8
+    if corr.max() / norm < 0.5:
+        return 0.0
+    return float(np.argmax(corr) - (len(pa) - 1))
+
+
+def _within_cap(dx, dy, w, h):
+    """A shift over 15% of the frame in 0.33s is a whip-pan, not a
+    sustained move. Periodic patterns alias to exactly such huge
+    spurious shifts -- they mark the measurement untrustworthy."""
+    return abs(dx) / w <= 0.15 and abs(dy) / h <= 0.15
+
+
 def _phase_shift(a, b):
     """Content displacement of b relative to a, in pixels (numpy only).
 
@@ -268,15 +295,35 @@ def _phase_shift(a, b):
         dy -= h
     if dx > w // 2:
         dx -= w
-    return float(-dx), float(-dy)
+    dx, dy = -dx, -dy  # 2D peak sits at the negated shift
+    if (dx != 0 or dy != 0) and _within_cap(dx, dy, w, h):
+        return float(dx), float(dy)
+    # 2D locked at (0,0) or aliased beyond the cap (periodic patterns):
+    # fall back to 1D column/row profile correlation, which is unambiguous
+    # there. NOTE: _profile_shift already returns the true content shift
+    # (positive = right/down), so unlike the 2D peak it is NOT negated.
+    dx = _profile_shift(a.mean(axis=0), b.mean(axis=0))
+    dy = _profile_shift(a.mean(axis=1), b.mean(axis=1))
+    if not _within_cap(dx, dy, w, h):
+        dx, dy = 0.0, 0.0
+    return float(dx), float(dy)
 
 
 def _best_zoom(a, b_pil):
-    """Find which uniform scale of b best matches a. Returns (scale, score)."""
+    """Find which uniform scale of b best matches a.
+
+    Returns (scale, score, score_at_1). score_at_1 is the no-zoom baseline:
+    a real zoom shows a clear PEAK above it, while ambiguous content
+    (pan, periodic patterns) scores flat across scales.
+    """
     import numpy as np
     from PIL import Image
     best = (1.0, -1.0)
-    for s in (0.85, 0.92, 0.97, 1.0, 1.03, 1.08, 1.18):
+    score_s1 = 0.0
+    # Denser near 1.0: real zooms are subtle and the true optimum often
+    # falls between coarse grid points, flattening the measured peak.
+    for s in (0.85, 0.90, 0.94, 0.97, 0.985, 1.0, 1.015, 1.03, 1.06, 1.10,
+              1.18):
         w, h = b_pil.size
         zb = b_pil.resize((max(8, int(w * s)), max(8, int(h * s))), Image.BILINEAR)
         # Compare fully-overlapping patches (no padded borders: they would
@@ -294,9 +341,20 @@ def _best_zoom(a, b_pil):
         an = (a_patch - a_patch.mean()) / (a_patch.std() + 1e-8)
         bn = (zb - zb.mean()) / (zb.std() + 1e-8)
         score = float((an * bn).mean())
+        if s == 1.0:
+            score_s1 = score
         if score > best[1]:
             best = (s, score)
-    return best
+    return best[0], best[1], score_s1
+
+
+def _zoom_trustworthy(score, score_s1):
+    """Dual gate for the zoom search: accept a confident absolute match
+    (catches slow zooms on rich content) OR a clear peak above the no-zoom
+    baseline (catches fast zooms on low-correlation content). Flat
+    profiles -- pan, periodic patterns -- fail both and can't invent a
+    phantom zoom."""
+    return score >= 0.85 or (score - score_s1) >= 0.15
 
 
 def estimate_motion(path, shot):
@@ -316,8 +374,11 @@ def estimate_motion(path, shot):
     if dur <= 0.2:
         return "static"
 
-    # probe positions spread through the shot; each pair spans GAP seconds
+    # probe positions spread through the shot; each pair spans GAP seconds.
+    # Probes stay EDGE away from the shot end: frames at exact boundaries
+    # carry encoder edge effects that alias the correlators.
     GAP = 0.33
+    EDGE = 0.25
     if dur >= 1.6:
         n_probes = 3
     elif dur >= 0.9:
@@ -327,11 +388,13 @@ def estimate_motion(path, shot):
     if n_probes == 1:
         starts = [a + 0.1]
     else:
-        starts = [a + 0.1 + i * (dur - 0.1 - GAP) / (n_probes - 1)
+        span = max(0.0, dur - 0.1 - EDGE - GAP)
+        starts = [a + 0.1 + i * span / (n_probes - 1)
                   for i in range(n_probes)]
 
     w = None
     zoom_prod, total_dt = 1.0, 0.0
+    in_votes = out_votes = 0
     shift_x, shift_y = 0.0, 0.0
     flat = False
     for t0 in starts:
@@ -350,9 +413,16 @@ def estimate_motion(path, shot):
                 break
         arr0 = np.asarray(f0, dtype=np.float32)
         dx, dy = _phase_shift(arr0, np.asarray(f1, dtype=np.float32))
-        s, _ = _best_zoom(arr0, f1)
-        # s shrinks/grows b to match a: content grew (zoom-IN) when s < 1
-        zoom_prod *= 1.0 / s
+        s, zscore, zs1 = _best_zoom(arr0, f1)
+        # s shrinks/grows b to match a: content grew (zoom-IN) when s < 1.
+        # Only trustworthy matches vote: flat score profiles (pan,
+        # periodic content) would otherwise invent a phantom zoom.
+        if _zoom_trustworthy(zscore, zs1):
+            zoom_prod *= 1.0 / s
+            if s < 0.999:
+                in_votes += 1
+            elif s > 1.001:
+                out_votes += 1
         shift_x += dx
         shift_y += dy
         total_dt += (t1 - t0)
@@ -366,8 +436,8 @@ def estimate_motion(path, shot):
     sy_rate = (shift_y / total_dt) / w
     pan_mag = math.hypot(sx_rate, sy_rate)
 
-    zoom_in = zoom_rate > 1.015   # >1.5%/s sustained push-in
-    zoom_out = zoom_rate < 1 / 1.015
+    zoom_in = zoom_rate > 1.015 and in_votes > 0 and in_votes >= out_votes
+    zoom_out = zoom_rate < 1 / 1.015 and out_votes > 0 and out_votes >= in_votes
     panning = pan_mag > 0.04      # >4% of frame width per second
 
     if zoom_in and panning:
