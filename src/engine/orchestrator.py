@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
@@ -233,6 +234,42 @@ class WorkflowEngine:
                 return node_res[key]
         return None
 
+    def _ensure_script_chain(self, scenes, node_data=None, need_motion=True):
+        """Enforce the script order: reel script -> image script -> image-to-video script.
+
+        1. The reel script (gen-script node) MUST exist in state — fail LOUD
+           if it is missing. Image and motion scripts are always written
+           FROM the reel script, never before it.
+        2. Every scene gets an image prompt grounded in the reel script.
+        3. (need_motion=True) Every scene gets an image-to-video motion
+           script grounded in its image prompt + the reel script.
+
+        Returns the updated scenes list.
+        """
+        main_script = self._find_in_state('script') or ''
+        if not main_script.strip():
+            raise RuntimeError(
+                "Reel script missing — run the gen-script node first. "
+                "Image scripts and image-to-video scripts are always written "
+                "FROM the reel script, never before it.")
+        visual_style = ((node_data or {}).get('visual_style')
+                        or self._find_in_state('visual_style')
+                        or 'cinema_8k')
+        from src.backend.free_prompting import ensure_image_prompts
+        scenes = ensure_image_prompts(scenes, main_script, visual_style)
+        # Clone mode: stamp the reference's composition/palette hint onto
+        # every image prompt so the new frames match the reference look.
+        for sc in scenes:
+            hint = (sc.get("composition_hint") or "").strip()
+            if hint:
+                ip = sc.get("image_prompt") or ""
+                if hint not in ip:
+                    sc["image_prompt"] = (ip + " " + hint).strip()
+        if need_motion:
+            from src.backend.free_prompting import ensure_video_prompts
+            scenes = ensure_video_prompts(scenes, main_script)
+        return scenes
+
     def _collect_sfx_timelines(self) -> List[dict]:
         """Merge every 'sfx_timeline' list found across node states.
 
@@ -368,7 +405,7 @@ class WorkflowEngine:
                 result = {"status": "success", "node_type": node_type, "title": script_title}
 
             elif node_type == 'gen-desc':
-                topic = self._find_in_state('topic_title') or self._find_in_state('topic') or 'PulseForge Video'
+                topic = self._find_in_state('topic_title') or self._find_in_state('topic') or 'AGAM Video'
                 desc = self._find_in_state('description')
                 desc_model = str(node_data.get('model', '') or '')
                 # Free-web background agent (ChatGPT Go, $0) for AI-written
@@ -465,13 +502,141 @@ class WorkflowEngine:
                     "hindi_audio_path": hindi_audio_path
                 }
                 
+            elif node_type == 'clone-short':
+                # ── Reference-clone: copy a YouTube Short's structure
+                #    frame-by-frame, then rebuild it with a NEW script. ──
+                # Order inside this node:
+                #   1. analyze the reference (shots, durations, camera moves,
+                #      palette/mood per shot),
+                #   2. write the NEW reel script with exactly one scene per
+                #      reference shot, each timed to its shot's duration,
+                #   3. ground each image prompt in the script + the shot's
+                #      composition hint,
+                #   4. copy each shot's camera move literally as the
+                #      image-to-video motion script.
+                # Downstream nodes (image-gen -> img-to-video -> assemble)
+                # then run unchanged.
+                from src.backend.reference_clone import (
+                    analyze_reference, split_script_for_shots)
+                from src.backend.script_gen import generate_video_content
+
+                reference_url = (node_data.get('reference_url')
+                                 or node_data.get('url') or '').strip()
+                if not reference_url:
+                    raise ValueError(
+                        "clone-short: no reference_url provided. Paste the "
+                        "YouTube Short URL in the node's Reference URL field.")
+                topic_title = (node_data.get('topic_title')
+                               or node_data.get('topic')
+                               or self._find_in_state('topic_title')
+                               or 'Cloned Short')
+                custom_script = (node_data.get('custom_script') or '').strip()
+                ai_model = node_data.get('model', 'GPT-4o')
+                custom_api_key = node_data.get('api_key', '') or node_data.get('custom_api_key', '')
+                visual_style = (node_data.get('visual_style')
+                                or self._find_in_state('visual_style') or 'cinema_8k')
+
+                work_dir = os.path.join("data", "reference_clone",
+                                        f"clone_{int(time.time())}")
+                print(f"[Orchestrator] clone-short: analyzing {reference_url}")
+                plan = analyze_reference(reference_url, work_dir)
+                shots = plan["shots"]
+                if not shots:
+                    raise RuntimeError("clone-short: no shots detected in the reference video.")
+                shot_durations = [s["duration"] for s in shots]
+                total_dur = round(sum(shot_durations), 1)
+                print(f"[Orchestrator] clone-short: {len(shots)} shots, "
+                      f"{total_dur}s total — writing new script for '{topic_title}'")
+
+                if custom_script:
+                    # User pasted their own script: distribute it across the
+                    # reference shots, proportional to shot duration.
+                    narrations = split_script_for_shots(custom_script, [
+                        (s["start"], s["end"]) for s in shots])
+                    scenes_list = []
+                    for i, (shot, narration) in enumerate(zip(shots, narrations)):
+                        scenes_list.append({
+                            "scene_number": i + 1,
+                            "narration": narration,
+                            "subtitle_text": " ".join(narration.split()[:4]).upper(),
+                            "sfx": "whoosh" if i else "impact",
+                            "transition_type": "whip_pan",
+                        })
+                    script_text = custom_script
+                    title = topic_title
+                else:
+                    script_data = generate_video_content(
+                        topic_title,
+                        node_data.get('custom_prompt', ''),
+                        model_name=ai_model,
+                        custom_api_key=custom_api_key,
+                        shorts_length=max(30, int(round(total_dur))),
+                        visual_style=visual_style,
+                        scene_count_override=len(shots),
+                        scene_durations=shot_durations,
+                    )
+                    scenes_list = (script_data.get('scenes') if script_data else []) or []
+                    if not scenes_list:
+                        raise RuntimeError(
+                            "clone-short: script generation returned no scenes.")
+                    script_text = script_data.get('script', '')
+                    title = script_data.get('title', topic_title)
+
+                # Map scenes 1:1 onto reference shots. If the model returned
+                # more/fewer scenes than shots, stretch or trim to fit —
+                # the reference timing always wins.
+                final_scenes = []
+                for i, shot in enumerate(shots):
+                    sc = dict(scenes_list[i]) if i < len(scenes_list) else dict(scenes_list[-1])
+                    sc["scene_number"] = i + 1
+                    sc["duration"] = shot["duration"]
+                    # Clone mode: reference timing wins over the 10s minimum.
+                    sc["exact_duration"] = True
+                    sc["reference_shot"] = {
+                        "index": shot["index"],
+                        "camera_move": shot["camera_move"],
+                        "palette": shot["palette"],
+                        "mood": shot["mood"],
+                    }
+                    # Composition hint: appended to the image prompt by
+                    # _ensure_script_chain (image-gen node), so it survives
+                    # prompt gap-filling in both script modes.
+                    if shot.get("composition_hint"):
+                        sc["composition_hint"] = shot["composition_hint"]
+                    # Literal copy of the reference camera move.
+                    sc["image_to_video_prompt"] = shot["motion_prompt"]
+                    final_scenes.append(sc)
+
+                result = {
+                    "status": "success",
+                    "node_type": node_type,
+                    "topic": topic_title,
+                    "topic_title": topic_title,
+                    "title": title,
+                    "script": script_text,
+                    "scenes": final_scenes,
+                    "shot_plan": [
+                        {"index": s["index"], "duration": s["duration"],
+                         "camera_move": s["camera_move"],
+                         "palette": s["palette"]}
+                        for s in shots
+                    ],
+                    "reference_url": reference_url,
+                    "reference_duration": plan["duration"],
+                }
+
             elif node_type in ['image-gen', 'visuals', 'gen-image']:
                 from src.backend.image_gen import generate_images_for_scenes
                 
                 scenes = node_data.get('scenes') or self._find_in_state('scenes')
                 if not scenes:
                     raise ValueError("No scenes provided for multi-image generation.")
-                
+
+                # Script order, step 1+2: reel script (loud fail if missing)
+                # -> image scripts grounded in the reel script.
+                scenes = self._ensure_script_chain(scenes, node_data,
+                                                   need_motion=False)
+
                 image_model = node_data.get('model', 'DALL-E 3')
                 custom_api_key = node_data.get('api_key', '')
                 visual_style = node_data.get('visual_style') or self._find_in_state('visual_style') or 'cinema_8k'
@@ -484,12 +649,6 @@ class WorkflowEngine:
                     prefer = (str(image_model).split(":", 1)[1].strip()
                               if ":" in str(image_model) else None)
                     print(f"[Orchestrator] image-gen via free-web agent (prefer={prefer or 'auto'})")
-                    # Every image gets a ChatGPT-written prompt grounded in
-                    # the main script (fills gaps; gen-script scenes usually
-                    # already carry one).
-                    from src.backend.free_prompting import ensure_image_prompts
-                    main_script = self._find_in_state('script') or ''
-                    scenes = ensure_image_prompts(scenes, main_script, visual_style)
                     for i, scene in enumerate(scenes):
                         prompt = (scene.get('image_prompt')
                                   or (scene.get('image_prompts') or [None])[0]
@@ -500,11 +659,15 @@ class WorkflowEngine:
                         print(f"[Orchestrator] scene {i + 1}: free-web image -> {os.path.basename(img_path)}")
                     updated_scenes = scenes
                 else:
+                    img_topic = (node_data.get('topic_title')
+                                 or self._find_in_state('topic_title')
+                                 or self._find_in_state('topic') or '')
                     updated_scenes = generate_images_for_scenes(
                         scenes, output_dir,
                         model_name=image_model,
                         custom_api_key=custom_api_key,
-                        visual_style=visual_style
+                        visual_style=visual_style,
+                        topic_title=img_topic,
                     )
                 
                 result = {
@@ -519,7 +682,13 @@ class WorkflowEngine:
                 scenes = node_data.get('scenes') or self._find_in_state('scenes')
                 if not scenes:
                     raise ValueError("No scenes provided for image-to-video generation.")
-                    
+
+                # Script order, step 1+2+3: reel script (loud fail if missing)
+                # -> image scripts grounded in the reel script -> motion
+                # scripts grounded in the image prompts + reel script.
+                scenes = self._ensure_script_chain(scenes, node_data,
+                                                   need_motion=True)
+
                 provider = node_data.get('provider', 'ComfyUI (Local Wan / SVD - Free)')
                 api_key = node_data.get('api_key', '')
                 output_dir = OUTPUT_DIR
@@ -533,14 +702,10 @@ class WorkflowEngine:
                     prefer = (str(provider).split(":", 1)[1].strip()
                               if ":" in str(provider) else None)
                     print(f"[Orchestrator] img-to-video via free-web agent (prefer={prefer or 'auto'})")
-                    # Every scene gets a dedicated ChatGPT-written motion
-                    # script (camera + in-frame dynamics) based on the main
-                    # script and the scene's image prompt — not a generic
-                    # push-in. Falls back to the next provider automatically
-                    # if the first option fails (A -> B -> C chain).
-                    from src.backend.free_prompting import ensure_video_prompts
-                    main_script = self._find_in_state('script') or ''
-                    scenes = ensure_video_prompts(scenes, main_script)
+                    # Motion scripts were already written from the reel script +
+                    # image prompts by _ensure_script_chain above. Falls back
+                    # to the next provider automatically if the first option
+                    # fails (A -> B -> C chain).
                     for i, scene in enumerate(scenes):
                         img = (scene.get('image_paths') or [None])[0] or scene.get('image_path')
                         prompt = (scene.get('image_to_video_prompt')
@@ -575,7 +740,7 @@ class WorkflowEngine:
                 music_path = self._find_in_state('music_path')
                 # Merge timelines from gen-sfx, meme-sound, audio-agent, ...
                 sfx_timeline = self._collect_sfx_timelines() or None
-                topic_title = self._find_in_state('topic_title') or self._find_in_state('topic') or 'PulseForge Short'
+                topic_title = self._find_in_state('topic_title') or self._find_in_state('topic') or 'AGAM Short'
                 viral_score = float(self._find_in_state('score') or 85.0)
                             
                 if not audio_path or not scenes:

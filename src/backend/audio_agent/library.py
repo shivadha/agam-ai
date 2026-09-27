@@ -10,8 +10,16 @@ import random
 from contextlib import contextmanager
 from datetime import datetime
 
-DB_PATH = os.environ.get("PULSEFORGE_DB_PATH", r"C:\AI_project\data\pulseforge.db")
-ASSETS_DIR = r"C:\AI_project\assets\sounds"
+# Resolve paths relative to the repo root so the audio agent always uses the
+# same database and asset folders as the rest of the app, wherever the repo
+# lives. (Previously these were hardcoded to C:\AI_project, which broke on
+# any machine where the project sits elsewhere.)
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
+DB_PATH = os.environ.get("PULSEFORGE_DB_PATH",
+                         os.path.join(_REPO_ROOT, "data", "pulseforge.db"))
+ASSETS_DIR = os.environ.get("AGAM_SOUNDS_DIR",
+                            os.path.join(_REPO_ROOT, "assets", "sounds"))
 
 
 @contextmanager
@@ -123,8 +131,8 @@ def seed_curated_sounds():
 
 def scan_local_sound_assets():
     """Scan existing local audio files in assets/ and assets/sounds/ and mark them downloaded."""
-    base_assets = r"C:\AI_project\assets"
-    sound_assets = r"C:\AI_project\assets\sounds"
+    base_assets = os.path.join(_REPO_ROOT, "assets")
+    sound_assets = ASSETS_DIR
 
     # Scan sound_assets subfolders
     if os.path.exists(sound_assets):
@@ -235,9 +243,9 @@ def save_sound_locally(sound_id: int) -> dict:
     if not downloaded:
         try:
             import shutil
-            fallback_src = os.path.join(r"C:\AI_project\assets", "hit.wav" if cat != "music" else "background_music.mp3")
+            fallback_src = os.path.join(_REPO_ROOT, "assets", "hit.wav" if cat != "music" else "background_music.mp3")
             if not os.path.exists(fallback_src):
-                fallback_src = os.path.join(r"C:\AI_project\assets", "whoosh.wav")
+                fallback_src = os.path.join(_REPO_ROOT, "assets", "whoosh.wav")
             if os.path.exists(fallback_src):
                 shutil.copyfile(fallback_src, local_path)
                 size_kb = os.path.getsize(local_path) // 1024

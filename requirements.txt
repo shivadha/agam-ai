@@ -16,3 +16,4 @@ google-auth-httplib2
 faster-whisper
 diffusers
 gradio_client
+yt-dlp

@@ -23,126 +23,79 @@ from .library import AudioLibrary, ASSETS_DIR
 # ─────────────────────────────────────────────────────────────
 # CURATED VIRAL MUSIC CATALOG
 # Royalty-free tracks organized by mood/genre
-# All from Pixabay CDN (CC0 or Pixabay License)
+# All URLs verified live (HTTP 200) — see notes above each list.
 # ─────────────────────────────────────────────────────────────
 CURATED_MUSIC = [
-    # ── PHONK / BRAINROT ──
-    {"name": "Dark Phonk Energy", "url": "https://cdn.pixabay.com/audio/2023/03/13/audio_2b5d9c2b10.mp3",
-     "subcategory": "phonk", "emotion": "energetic", "energy_level": 9,
-     "tags": ["phonk", "dark", "viral", "brainrot", "sigma", "gym", "drift"]},
-    {"name": "Aggressive Phonk Beat", "url": "https://cdn.pixabay.com/audio/2022/10/16/audio_1be60f7e31.mp3",
-     "subcategory": "phonk", "emotion": "energetic", "energy_level": 10,
-     "tags": ["phonk", "aggressive", "motivation", "viral", "tiktok"]},
-    {"name": "Phonk Drift Vibes", "url": "https://cdn.pixabay.com/audio/2023/09/09/audio_1d5d4e63c0.mp3",
-     "subcategory": "phonk", "emotion": "energetic", "energy_level": 8,
-     "tags": ["phonk", "drift", "car", "sigma", "viral"]},
-
-    # ── CINEMATIC / SUSPENSE ──
-    {"name": "Dark Cinematic Rise", "url": "https://cdn.pixabay.com/audio/2023/01/25/audio_c4e1f2a3b5.mp3",
-     "subcategory": "cinematic", "emotion": "suspense", "energy_level": 7,
-     "tags": ["cinematic", "suspense", "dark", "thriller", "dramatic"]},
-    {"name": "Epic Tension Build", "url": "https://cdn.pixabay.com/audio/2024/01/09/audio_dc7e68e0b6.mp3",
-     "subcategory": "cinematic", "emotion": "suspense", "energy_level": 8,
-     "tags": ["tension", "epic", "reveal", "dramatic", "cinematic"]},
-    {"name": "Mystery Atmosphere", "url": "https://cdn.pixabay.com/audio/2022/11/15/audio_5e00f1c3d7.mp3",
-     "subcategory": "ambient", "emotion": "suspense", "energy_level": 4,
-     "tags": ["mystery", "ambient", "dark", "eerie", "documentary"]},
-
-    # ── ENERGETIC / UPBEAT ──
-    {"name": "Viral Upbeat Pop", "url": "https://cdn.pixabay.com/audio/2024/03/07/audio_61ca6bbd87.mp3",
-     "subcategory": "pop", "emotion": "energetic", "energy_level": 8,
-     "tags": ["upbeat", "pop", "viral", "happy", "tiktok", "shorts"]},
-    {"name": "Hype Electronic Drop", "url": "https://cdn.pixabay.com/audio/2023/07/25/audio_d4c9e8f2a1.mp3",
-     "subcategory": "electronic", "emotion": "energetic", "energy_level": 9,
-     "tags": ["electronic", "hype", "drop", "edm", "viral", "party"]},
-    {"name": "Summer Vibes Beat", "url": "https://cdn.pixabay.com/audio/2024/05/15/audio_a3b2c1d0e9.mp3",
+    # Royalty-free electronic tracks (SoundHelix demo catalog — every URL
+    # below was verified returning HTTP 200 on 2026-09-26). Free to hotlink.
+    {"name": "Energetic Electronic Drive", "url": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+     "subcategory": "electronic", "emotion": "energetic", "energy_level": 8,
+     "tags": ["electronic", "energetic", "viral", "hype", "tiktok", "edm"]},
+    {"name": "Upbeat Pop Energy", "url": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
      "subcategory": "pop", "emotion": "energetic", "energy_level": 7,
-     "tags": ["summer", "happy", "vibrant", "upbeat", "fun", "reels"]},
-
-    # ── LO-FI / CHILL ──
-    {"name": "Lo-Fi Study Chill", "url": "https://cdn.pixabay.com/audio/2022/08/04/audio_2dde668d05.mp3",
-     "subcategory": "lo-fi", "emotion": "calm", "energy_level": 3,
-     "tags": ["lofi", "chill", "study", "relaxing", "aesthetic", "vibe"]},
-    {"name": "Nostalgic Lo-Fi Hip Hop", "url": "https://cdn.pixabay.com/audio/2023/04/12/audio_8f3c5b2a1d.mp3",
-     "subcategory": "lo-fi", "emotion": "calm", "energy_level": 3,
-     "tags": ["lofi", "hiphop", "nostalgic", "cozy", "chill", "beats"]},
-
-    # ── FUTURISTIC / AI / TECH ──
-    {"name": "Futuristic Synth Wave", "url": "https://cdn.pixabay.com/audio/2024/02/15/audio_7f8e9d0c1b.mp3",
+     "tags": ["upbeat", "pop", "viral", "happy", "tiktok", "shorts"]},
+    {"name": "Chill Electronic Vibes", "url": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+     "subcategory": "chill", "emotion": "calm", "energy_level": 4,
+     "tags": ["chill", "relaxing", "aesthetic", "vibe", "lofi"]},
+    {"name": "Cinematic Electronic Build", "url": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
+     "subcategory": "cinematic", "emotion": "suspense", "energy_level": 7,
+     "tags": ["cinematic", "suspense", "build", "dramatic", "thriller"]},
+    {"name": "Dark Electronic Pulse", "url": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
+     "subcategory": "electronic", "emotion": "energetic", "energy_level": 8,
+     "tags": ["dark", "electronic", "phonk", "viral", "gym", "drift"]},
+    {"name": "Futuristic Synth Flow", "url": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-10.mp3",
      "subcategory": "synthwave", "emotion": "futuristic", "energy_level": 7,
      "tags": ["synthwave", "futuristic", "ai", "tech", "cyberpunk", "neon"]},
-    {"name": "Cyberpunk Beats", "url": "https://cdn.pixabay.com/audio/2023/11/20/audio_3a4b5c6d7e.mp3",
-     "subcategory": "electronic", "emotion": "futuristic", "energy_level": 8,
-     "tags": ["cyberpunk", "futuristic", "electronic", "tech", "ai"]},
-    {"name": "Sci-Fi Atmosphere", "url": "https://cdn.pixabay.com/audio/2023/06/30/audio_9c8b7a6d5e.mp3",
-     "subcategory": "ambient", "emotion": "futuristic", "energy_level": 5,
-     "tags": ["scifi", "space", "ambient", "tech", "futuristic", "minimal"]},
-
-    # ── MOTIVATIONAL / INSPIRATION ──
-    {"name": "Epic Motivation Anthem", "url": "https://cdn.pixabay.com/audio/2024/04/20/audio_2e3f4a5b6c.mp3",
-     "subcategory": "orchestral", "emotion": "inspiration", "energy_level": 9,
-     "tags": ["motivational", "epic", "orchestral", "sports", "winner", "rise"]},
-    {"name": "Uplifting Corporate", "url": "https://cdn.pixabay.com/audio/2023/08/18/audio_1b2c3d4e5f.mp3",
-     "subcategory": "corporate", "emotion": "inspiration", "energy_level": 6,
-     "tags": ["uplifting", "positive", "corporate", "success", "business"]},
-
-    # ── DRAMATIC / SHOCK ──
-    {"name": "Dramatic Impact Hit", "url": "https://cdn.pixabay.com/audio/2022/12/01/audio_6f7a8b9c0d.mp3",
-     "subcategory": "dramatic", "emotion": "shock", "energy_level": 9,
+    {"name": "Dramatic Electronic Rise", "url": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-11.mp3",
+     "subcategory": "dramatic", "emotion": "shock", "energy_level": 8,
      "tags": ["dramatic", "impact", "shock", "reveal", "news", "breaking"]},
-    {"name": "Horror Tension Sting", "url": "https://cdn.pixabay.com/audio/2024/10/05/audio_4d5e6f7a8b.mp3",
-     "subcategory": "horror", "emotion": "fear", "energy_level": 8,
-     "tags": ["horror", "scary", "tension", "sting", "thriller", "creepy"]},
-
-    # ── FUNNY / MEME ──
-    {"name": "Comedic Boing", "url": "https://cdn.pixabay.com/audio/2022/07/18/audio_0a1b2c3d4e.mp3",
-     "subcategory": "comedy", "emotion": "funny", "energy_level": 5,
-     "tags": ["funny", "comedy", "cartoon", "boing", "silly", "meme"]},
-    {"name": "Wah Wah Fail", "url": "https://cdn.pixabay.com/audio/2023/02/25/audio_5e6f7a8b9c.mp3",
-     "subcategory": "comedy", "emotion": "funny", "energy_level": 4,
-     "tags": ["fail", "wah", "comedy", "sad-trombone", "meme", "funny"]},
+    {"name": "Mellow Electronic Groove", "url": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-12.mp3",
+     "subcategory": "chill", "emotion": "calm", "energy_level": 4,
+     "tags": ["mellow", "groove", "chill", "cozy", "study", "beats"]},
 ]
 
 # ─────────────────────────────────────────────────────────────
 # CURATED MEME / SFX SOUNDS
 # ─────────────────────────────────────────────────────────────
 CURATED_SFX = [
-    {"name": "Vine Boom", "url": "https://cdn.pixabay.com/audio/2022/03/15/audio_d2d1a1cdef.mp3",
+    # Meme / SFX staples hosted on MyInstants (direct media URLs — every URL
+    # below was verified returning HTTP 200 on 2026-09-26).
+    {"name": "Vine Boom", "url": "https://www.myinstants.com/media/sounds/vine-boom.mp3",
      "subcategory": "meme", "emotion": "shock", "energy_level": 8,
      "tags": ["vine-boom", "meme", "impact", "viral", "tiktok", "funny"]},
-    {"name": "Bruh Sound Effect", "url": "https://cdn.pixabay.com/audio/2021/08/04/audio_0625f4a8d5.mp3",
+    {"name": "Bruh Sound Effect", "url": "https://www.myinstants.com/media/sounds/aye-bruh-you-got-a-phone-call.mp3",
      "subcategory": "meme", "emotion": "funny", "energy_level": 5,
      "tags": ["bruh", "meme", "reaction", "funny", "viral"]},
-    {"name": "Rizz Bell Notification", "url": "https://cdn.pixabay.com/audio/2023/05/10/audio_8a9b0c1d2e.mp3",
+    {"name": "Boi What Da Hell", "url": "https://www.myinstants.com/media/sounds/boi-what-da-hell-boi-sound-effect_sstnVvi.mp3",
+     "subcategory": "meme", "emotion": "funny", "energy_level": 6,
+     "tags": ["meme", "reaction", "funny", "viral", "shocked"]},
+    {"name": "Discord Notification", "url": "https://www.myinstants.com/media/sounds/discord-notification.mp3",
      "subcategory": "notification", "emotion": "energetic", "energy_level": 6,
-     "tags": ["bell", "notification", "rizz", "tiktok", "viral", "alert"]},
-    {"name": "Dramatic Bass Hit", "url": "https://cdn.pixabay.com/audio/2022/09/30/audio_3f4a5b6c7d.mp3",
-     "subcategory": "impact", "emotion": "shock", "energy_level": 9,
-     "tags": ["bass", "hit", "impact", "cinematic", "dramatic", "transition"]},
-    {"name": "Suspense Sting", "url": "https://cdn.pixabay.com/audio/2023/07/04/audio_9c0d1e2f3a.mp3",
-     "subcategory": "sting", "emotion": "suspense", "energy_level": 7,
-     "tags": ["suspense", "sting", "reveal", "dramatic", "cinematic"]},
-    {"name": "Crowd Wow Reaction", "url": "https://cdn.pixabay.com/audio/2022/11/22/audio_4b5c6d7e8f.mp3",
-     "subcategory": "crowd", "emotion": "energetic", "energy_level": 7,
-     "tags": ["crowd", "wow", "reaction", "audience", "impressed", "viral"]},
-    {"name": "Cash Register Cha-Ching", "url": "https://cdn.pixabay.com/audio/2022/03/10/audio_1d2e3f4a5b.mp3",
-     "subcategory": "money", "emotion": "energetic", "energy_level": 6,
-     "tags": ["money", "cash", "ching", "success", "profit", "finance"]},
-    {"name": "Glitch Data Corrupt", "url": "https://cdn.pixabay.com/audio/2023/04/28/audio_6c7d8e9f0a.mp3",
-     "subcategory": "glitch", "emotion": "futuristic", "energy_level": 7,
-     "tags": ["glitch", "data", "corrupt", "tech", "error", "digital"]},
-    {"name": "WhatsApp Notification", "url": "https://cdn.pixabay.com/audio/2021/08/09/audio_0b1c2d3e4f.mp3",
+     "tags": ["notification", "discord", "alert", "tiktok", "viral", "message"]},
+    {"name": "Android Notification", "url": "https://www.myinstants.com/media/sounds/android-notification.mp3",
      "subcategory": "notification", "emotion": "energetic", "energy_level": 4,
-     "tags": ["whatsapp", "notification", "message", "alert", "social"]},
-    {"name": "Sad Violin Meme", "url": "https://cdn.pixabay.com/audio/2022/06/09/audio_7e8f9a0b1c.mp3",
-     "subcategory": "meme", "emotion": "funny", "energy_level": 3,
-     "tags": ["sad-violin", "meme", "fail", "comedy", "funny", "ironic"]},
-    {"name": "Air Horn Hype", "url": "https://cdn.pixabay.com/audio/2022/02/15/audio_2d3e4f5a6b.mp3",
+     "tags": ["notification", "android", "message", "alert", "social"]},
+    {"name": "Air Horn Hype", "url": "https://www.myinstants.com/media/sounds/airhorn.mp3",
      "subcategory": "meme", "emotion": "energetic", "energy_level": 10,
      "tags": ["airhorn", "hype", "party", "meme", "viral", "pump-up"]},
-    {"name": "Tutorial Ding Level Up", "url": "https://cdn.pixabay.com/audio/2023/08/29/audio_8f9a0b1c2d.mp3",
+    {"name": "Fast Whoosh", "url": "https://www.myinstants.com/media/sounds/fast-whoosh.mp3",
+     "subcategory": "transition", "emotion": "energetic", "energy_level": 6,
+     "tags": ["whoosh", "transition", "swipe", "fast", "cinematic"]},
+    {"name": "Abrupt Whoosh", "url": "https://www.myinstants.com/media/sounds/abrupt-whoosh.mp3",
+     "subcategory": "transition", "emotion": "energetic", "energy_level": 7,
+     "tags": ["whoosh", "transition", "impact", "cut", "dramatic"]},
+    {"name": "Suspense Riser", "url": "https://www.myinstants.com/media/sounds/cinematic-suspense-riser.mp3",
+     "subcategory": "sting", "emotion": "suspense", "energy_level": 7,
+     "tags": ["suspense", "riser", "reveal", "dramatic", "cinematic", "build"]},
+    {"name": "Cartoon Record Scratch", "url": "https://www.myinstants.com/media/sounds/cartoon-record-scratch.mp3",
+     "subcategory": "comedy", "emotion": "funny", "energy_level": 5,
+     "tags": ["record-scratch", "comedy", "fail", "cartoon", "funny", "meme"]},
+    {"name": "Tada Success", "url": "https://www.myinstants.com/media/sounds/android-tada.mp3",
      "subcategory": "success", "emotion": "energetic", "energy_level": 5,
-     "tags": ["ding", "levelup", "success", "achievement", "tutorial", "game"]},
+     "tags": ["tada", "success", "achievement", "levelup", "win", "game"]},
+    {"name": "Balloon Pop", "url": "https://www.myinstants.com/media/sounds/balloon-pop.mp3",
+     "subcategory": "comedy", "emotion": "funny", "energy_level": 5,
+     "tags": ["pop", "balloon", "comedy", "cartoon", "silly", "meme"]},
 ]
 
 HEADERS = {
@@ -458,28 +411,38 @@ class AudioScraper:
     # HELPERS
     # ─────────────────────────────────────────────────
     def _download(self, url: str, local_path: str) -> tuple:
-        """Download a file. Returns (success: bool, size_kb: int)."""
-        try:
-            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-            req = urllib.request.Request(url, headers=HEADERS)
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = resp.read()
-            if len(data) < 100:
-                return False, 0
-            with open(local_path, "wb") as f:
-                f.write(data)
-            size_kb = len(data) // 1024
-            print(f"[AudioAgent] Downloaded: {os.path.basename(local_path)} ({size_kb}KB)")
-            return True, size_kb
-        except Exception as e:
-            print(f"[AudioAgent] Download failed for {url}: {e}")
-            # Clean up partial file
-            if os.path.exists(local_path):
-                try:
-                    os.remove(local_path)
-                except Exception:
-                    pass
-            return False, 0
+        """Download a file. Returns (success: bool, size_kb: int).
+
+        Retries a few times with backoff — big hosts (e.g. SoundHelix)
+        sometimes reset rapid sequential downloads mid-stream
+        (IncompleteRead)."""
+        import time as _time
+        last_err = None
+        for attempt in range(3):
+            try:
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                req = urllib.request.Request(url, headers=HEADERS)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = resp.read()
+                if len(data) < 100:
+                    last_err = ValueError(f"too small ({len(data)} bytes)")
+                    raise last_err
+                with open(local_path, "wb") as f:
+                    f.write(data)
+                size_kb = len(data) // 1024
+                print(f"[AudioAgent] Downloaded: {os.path.basename(local_path)} ({size_kb}KB)")
+                return True, size_kb
+            except Exception as e:
+                last_err = e
+                if os.path.exists(local_path):
+                    try:
+                        os.remove(local_path)
+                    except Exception:
+                        pass
+                if attempt < 2:
+                    _time.sleep(2 * (attempt + 1))
+        print(f"[AudioAgent] Download failed for {url}: {last_err}")
+        return False, 0
 
     def _url_to_filename(self, url: str, category: str) -> str:
         """Convert URL to a safe local filename."""

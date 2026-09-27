@@ -124,7 +124,7 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
     Walk the provider chain and return the first successful completion text,
     or None when nothing produced output. Order mirrors production priority:
     Astra -> explicit Ollama -> Muse Spark -> Groq -> Gemini -> OpenAI ->
-    OpenRouter (free :free models) -> Pollinations (free) ->
+    OpenRouter (free :free models) -> Cerebras (free) -> Pollinations (free) ->
     Hugging Face Inference (free).
     """
     content_str = None
@@ -240,11 +240,17 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
             except Exception as g_err:
                 print(f"[script_gen] [{tag}] Groq attempt failed ({g_model}): {g_err}")
 
-    # 4. Google Gemini API
-    gemini_key = clean_key if ("gemini" in model_name.lower()) else (os.environ.get("GEMINI_API_KEY", "").strip() or clean_key)
+    # 4. Google Gemini API (AI Studio free tier: no card, ~1,500 req/day).
+    # 2026-09-27: Google retired 2.x for new API keys; current lineup is 3.x.
+    # gemini-3.8-flash is the flagship, 3.5-flash-lite the cheap/fast one.
+    # 503 (high demand) falls through to the next model automatically.
+    gemini_key = clean_key if ("gemini" in model_name.lower()) else (
+        os.environ.get("GEMINI_API_KEY", "").strip()
+        or os.environ.get("GOOGLE_AI_STUDIO_KEY", "").strip()
+        or clean_key)
     if not content_str and gemini_key:
         print(f"[script_gen] [{tag}] Routing to Google Gemini API...")
-        for gem_model in ["gemini-2.0-flash", "gemini-1.5-flash"]:
+        for gem_model in ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{gem_model}:generateContent?key={gemini_key}"
                 payload = {
@@ -290,6 +296,7 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
     # 5.5. OpenRouter — one free key unlocks 300+ models, many with :free tiers.
     # Free tier needs no card: 20 req/min, 50 req/day. Tries several free
     # models in order since the free lineup rotates without warning.
+    # (Refreshed 2026-09-27; override via OPENROUTER_MODELS env.)
     or_key = ""
     if "openrouter" in model_name.lower():
         or_key = clean_key or os.environ.get("OPENROUTER_API_KEY", "").strip()
@@ -297,10 +304,12 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
         or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not content_str and or_key:
         or_models = [m.strip() for m in os.environ.get("OPENROUTER_MODELS", "").split(",") if m.strip()] or [
-            "deepseek/deepseek-chat:free",
-            "qwen/qwen3-235b-a22b:free",
-            "google/gemma-3-27b-it:free",
             "openai/gpt-oss-120b:free",
+            "openai/gpt-oss-20b:free",
+            "google/gemma-4-31b-it:free",
+            "nvidia/nemotron-3.5-lightning:free",
+            "z-ai/glm-5.2:free",
+            "cohere/north-mini-code:free",
         ]
         print(f"[script_gen] [{tag}] Routing to OpenRouter (free models)...")
         for or_model in or_models:
@@ -323,6 +332,33 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
                     print(f"[script_gen] [{tag}] OpenRouter ({or_model}) HTTP {or_resp.status_code}: {or_resp.text[:120]}")
             except Exception as or_err:
                 print(f"[script_gen] [{tag}] OpenRouter attempt failed ({or_model}): {or_err}")
+
+    # 5.6. Cerebras — free tier, no card: ~1M tokens/day, very fast inference.
+    # OpenAI-compatible endpoint. Good overflow when OpenRouter's daily quota
+    # is spent.
+    cb_key = os.environ.get("CEREBRAS_API_KEY", "").strip()
+    if not content_str and cb_key:
+        print(f"[script_gen] [{tag}] Routing to Cerebras (free tier)...")
+        for cb_model in ["gpt-oss-120b", "qwen-3.8-27b"]:
+            try:
+                cb_resp = requests.post(
+                    "https://api.cerebras.ai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {cb_key}", "Content-Type": "application/json"},
+                    json={"model": cb_model,
+                          "messages": [{"role": "system", "content": system_prompt},
+                                       {"role": "user", "content": user_prompt}],
+                          "temperature": 0.7,
+                          "max_tokens": max_new_tokens},
+                    timeout=45,
+                )
+                if cb_resp.status_code == 200:
+                    content_str = cb_resp.json()["choices"][0]["message"]["content"]
+                    print(f"[script_gen] [{tag}] [OK] Cerebras ({cb_model}) responded.")
+                    break
+                else:
+                    print(f"[script_gen] [{tag}] Cerebras ({cb_model}) HTTP {cb_resp.status_code}: {cb_resp.text[:120]}")
+            except Exception as cb_err:
+                print(f"[script_gen] [{tag}] Cerebras attempt failed ({cb_model}): {cb_err}")
 
     # 6. Free Online Pollinations Text AI Engine
     if not content_str:
@@ -502,7 +538,8 @@ def _validate_and_repair_scenes(raw_scenes: list, topic_title: str, visual_style
 
 def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", custom_api_key="",
                            shorts_length=35, visual_style="cinema_8k",
-                           article_url="", article_summary="", topic_context=""):
+                           article_url="", article_summary="", topic_context="",
+                           scene_count_override=None, scene_durations=None):
     """
     Generates a full, high-retention transcript first, then derives scene-specific image prompts,
     img-to-video motion prompts, sound design, and subtitle overlays.
@@ -529,7 +566,23 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
     # Word count: 2.5 words per second = ~80-110 words for 30-40s
     word_count_min = max(75, int(target_length * 2.3))
     word_count_max = max(95, int(target_length * 2.8))
-    scene_count_target = max(6, int(target_length / 4.5))
+    # Clone mode: the caller dictates the exact scene count (one scene per
+    # reference shot) and each scene's exact duration.
+    clone_mode = bool(scene_count_override)
+    scene_count_target = int(scene_count_override) if clone_mode else max(6, int(target_length / 4.5))
+    if clone_mode and scene_durations:
+        target_length = int(round(sum(scene_durations)))
+        word_count_min = max(20, int(target_length * 2.3))
+        word_count_max = max(30, int(target_length * 2.8))
+        per_scene_rule = ("- Scene count is EXACTLY "
+                          f"{scene_count_target} — one scene per reference shot, no more, no less.\n"
+                          + "".join(
+                              f"- Scene {i + 1}: narration ~{max(6, int(d * 2.5))} words, "
+                              f"duration EXACTLY {d:.1f} seconds.\n"
+                              for i, d in enumerate(scene_durations)))
+    else:
+        per_scene_rule = (f"- Total Scenes: {scene_count_target} scenes. "
+                          f"Each scene duration between 4.0 and 5.5 seconds.\n")
 
     system_prompt = (
         f"You are an award-winning cinematic director and viral storytelling expert (MagnatesMedia & Vox style).\n"
@@ -539,7 +592,7 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
         f"STRICT DURATION & WORD COUNT RULES:\n"
         f"- Target Duration: {target_length} SECONDS (MUST BE AT LEAST 30 SECONDS).\n"
         f"- Total Spoken Words: Between {word_count_min} and {word_count_max} words.\n"
-        f"- Total Scenes: {scene_count_target} scenes. Each scene duration between 4.0 and 5.5 seconds.\n\n"
+        f"{per_scene_rule}\n"
         f"MANDATORY ARCHITECTURE — TITLE SCENE & CONNECTING SCENES:\n"
         f"1. SCENE 1 (THE TITLE HERO SCENE):\n"
         f"   - Must serve as the Title Visual Hook. Its 'image_prompt' must be a jaw-dropping, iconic visual embodiment of the Topic Title: '{topic_title}'.\n"

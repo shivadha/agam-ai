@@ -78,6 +78,7 @@ const NDEFS = {
     'analytics-pull':   { label:'Channel Analytics',     icon:'📊',  cat:'ai',       color:'#0ea5e9', execMs:2000 },
     'seo-pack':         { label:'SEO Pack',              icon:'🏷',  cat:'ai',       color:'#0ea5e9', execMs:1500 },
     'score-script':     { label:'Retention Score',       icon:'💯',  cat:'ai',       color:'#0ea5e9', execMs:1200 },
+    'clone-short':      { label:'Clone YouTube Short',   icon:'👯',  cat:'ai',       color:'#8b5cf6', execMs:20000 },
     'add-music':        { label:'Add Music (Ducked)',    icon:'🎧',  cat:'media',    color:'#0d9488', execMs:3000 },
     'fetch-broll':      { label:'Fetch B-Roll',          icon:'🎞',  cat:'media',    color:'#0d9488', execMs:4000 },
     'cut-shorts':       { label:'Cut Viral Shorts',      icon:'✂️',  cat:'media',    color:'#0d9488', execMs:6000 },
@@ -136,6 +137,12 @@ const NODE_CONFIGS = {
         { key:'shorts_length', label:'Shorts Length', type:'select', opts:['30 seconds','45 seconds','60 seconds'], def:'45 seconds' },
         { key:'style',    label:'Video Style',  type:'select', opts:['Viral Short','Informative','Educational','Entertaining','Tutorial'], def:'Viral Short' },
         { key:'prompt',   label:'Custom Prompt',type:'textarea', placeholder:'Add any extra instructions for AI context...', def:'' },
+    ],
+    'clone-short': [
+        { key:'reference_url', label:'Reference Short URL', type:'text', placeholder:'Paste any YouTube Short URL to copy frame-by-frame...', def:'' },
+        { key:'topic_title',   label:'New Topic', type:'text', placeholder:'Topic for the NEW script (e.g. AI gadgets)', def:'' },
+        { key:'custom_script', label:'Custom Script (Optional)', type:'textarea', placeholder:'Or paste your own full script — it will be split across the reference shots', def:'' },
+        { key:'model',         label:'AI Model', type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','OpenRouter (Free Models)','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
     ],
     'translate': [
         { key:'lang',     label:'Target Language', type:'select', opts:['Hindi','Spanish','French','German','Japanese','Portuguese'], def:'Hindi' },
@@ -269,6 +276,7 @@ const FREE_MODE_PRESETS = {
     'gen-script':          { model: 'Gemini 2.0 Flash [Free]' },
     'extract-viral-angle': { model: 'Gemini 2.0 Flash [Free]' },
     'gen-hook':            { model: 'Gemini 2.0 Flash [Free]' },
+    'clone-short':         { model: 'Groq (Qwen 3.8 27B) [Free]' },
     'tts':                 { voice: 'Kokoro-82M (af_heart) [Local Free]' },
     'gen-image':           { model: 'Pollinations FLUX [Free]' },
     'image-gen':           { model: 'Pollinations FLUX [Free]' },
@@ -2139,6 +2147,26 @@ function applyWorkflowPreset(presetKey) {
             { id:'c3', from:'n3', to:'n4' },
             { id:'c4', from:'n3', to:'n5' },
             { id:'c5', from:'n4', to:'n5' }
+        ];
+    } else if (presetKey === 'clone_short') {
+        name = 'Clone a YouTube Short';
+        ns = [
+            { id:'n1', type:'manual-trigger', x:80,   y:300 },
+            { id:'n2', type:'clone-short',    x:360,  y:300 },
+            { id:'n3', type:'tts',            x:660,  y:180 },
+            { id:'n4', type:'gen-image',      x:660,  y:420 },
+            { id:'n5', type:'img-to-video',  x:960,  y:420 },
+            { id:'n6', type:'bg-music',       x:960,  y:180 },
+            { id:'n7', type:'assemble-video', x:1260, y:300 }
+        ];
+        cs = [
+            { id:'c1', from:'n1', to:'n2' },
+            { id:'c2', from:'n2', to:'n3' },
+            { id:'c3', from:'n2', to:'n4' },
+            { id:'c4', from:'n4', to:'n5' },
+            { id:'c5', from:'n3', to:'n6' },
+            { id:'c6', from:'n6', to:'n7' },
+            { id:'c7', from:'n5', to:'n7' }
         ];
     }
     
