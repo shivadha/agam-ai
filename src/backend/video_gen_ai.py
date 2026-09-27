@@ -940,11 +940,12 @@ def _generate_fal_ai_luma(image_path: str, prompt: str, api_key: str, output_pat
 
 def _generate_procedural_neural_motion_video(image_path: str, prompt: str, duration: float, output_path: str, width: int = 1080, height: int = 1920) -> str:
     """
-    Renders a 1080x1920 MP4 video file applying cinematic camera physics
-    and neural motion effects derived specifically from the prompt.
-    Guarantees that a rich, animated MP4 video file is ALWAYS created and returned.
+    Layered motion compositor: 2.5D parallax (blurred drifting background +
+    sharp foreground subject card), prompt-keyed particle systems
+    (embers / dust / rain / snow / bokeh), animated light sweeps, film grain
+    and vignette. Guarantees a rich, animated MP4 is ALWAYS created.
     """
-    from PIL import Image, ImageFilter, ImageEnhance
+    from PIL import Image, ImageFilter, ImageEnhance, ImageDraw
     from moviepy import VideoClip
     import numpy as np
     import math
@@ -953,98 +954,195 @@ def _generate_procedural_neural_motion_video(image_path: str, prompt: str, durat
         duration = 4.0
 
     img = Image.open(image_path).convert("RGB")
-    # Resize and crop to 1080x1920 with high quality Lanczos + margin for motion
+    # Oversized canvas so the camera always has room to roam
     img_ratio = img.width / img.height
     target_ratio = width / height
     if img_ratio > target_ratio:
-        new_height = height + 180
+        new_height = height + 220
         new_width = int(new_height * img_ratio)
     else:
-        new_width = width + 180
+        new_width = width + 220
         new_height = int(new_width / img_ratio)
-        
     img_large = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-    img_arr = np.array(img_large)
-    
+    W, H = new_width, new_height
+    base = np.asarray(img_large).astype(np.float32) / 255.0
+
     prompt_lower = (prompt or "").lower()
-    
-    # Motion archetype selection based on image_to_video_prompt
-    if any(k in prompt_lower for k in ["whip", "swipe", "pan left", "fast left"]):
+
+    # ── Motion archetype from the motion script ──────────────────────────
+    if any(k in prompt_lower for k in ["whip", "swipe", "pan left", "fast left", "chase"]):
         motion_type = "whip_pan_left"
     elif any(k in prompt_lower for k in ["pan right", "reveal right", "slide right"]):
         motion_type = "whip_pan_right"
-    elif any(k in prompt_lower for k in ["punch", "zoom burst", "speed ramp", "explode"]):
+    elif any(k in prompt_lower for k in ["punch", "zoom burst", "speed ramp", "explode", "impact", "boom"]):
         motion_type = "speed_ramp_punch"
     elif any(k in prompt_lower for k in ["zoom out", "reveal", "pull back", "wide"]):
         motion_type = "zoom_burst_out"
-    elif any(k in prompt_lower for k in ["parallax", "holographic", "data", "drift"]):
+    elif any(k in prompt_lower for k in ["parallax", "holographic", "data", "drift", "float", "soar", "fly"]):
         motion_type = "parallax_drift"
-    elif any(k in prompt_lower for k in ["light", "glow", "laser", "pulse", "energy", "spark"]):
+    elif any(k in prompt_lower for k in ["light", "glow", "laser", "pulse", "energy", "spark", "neon"]):
         motion_type = "lighting_pulse_sweep"
-    elif any(k in prompt_lower for k in ["shake", "earthquake", "shatter", "crisis", "shock"]):
+    elif any(k in prompt_lower for k in ["shake", "earthquake", "shatter", "crisis", "shock", "fight", "war", "battle"]):
         motion_type = "camera_shake_micro"
     else:
         motion_type = "cinematic_dolly_glide"
-        
-    print(f"[video_gen_ai] [Procedural Engine] Synthesizing '{motion_type}' motion video ({duration:.1f}s) for prompt: '{prompt[:60]}...'")
 
-    def make_frame(t):
+    energetic = motion_type in ("speed_ramp_punch", "camera_shake_micro",
+                                "whip_pan_left", "whip_pan_right")
+
+    print(f"[video_gen_ai] [Motion Compositor] '{motion_type}' + parallax + particles "
+          f"({duration:.1f}s) for: '{prompt[:60]}...'")
+
+    # ── Layers ───────────────────────────────────────────────────────────
+    # Far layer: blurred + darkened, drifts slowly (moves LESS → depth)
+    bg_pil = img_large.filter(ImageFilter.GaussianBlur(28))
+    bg_pil = ImageEnhance.Brightness(bg_pil).enhance(0.52)
+    bg = np.asarray(bg_pil).astype(np.float32) / 255.0
+    # Near layer: sharp "subject card" (moves MORE → depth)
+    fg = base
+
+    # Feathered elliptical mask for the subject card
+    my, mx = np.ogrid[:H, :W]
+    ex = (mx - W / 2) / (W * 0.40)
+    ey = (my - H / 2) / (H * 0.44)
+    dist = np.sqrt(ex * ex + ey * ey)
+    mask = np.clip(1.0 - (dist - 0.72) / 0.38, 0, 1).astype(np.float32)
+    mask = np.asarray(Image.fromarray((mask * 255).astype(np.uint8))
+                      .filter(ImageFilter.GaussianBlur(45))).astype(np.float32) / 255.0
+    mask3 = mask[:, :, None]
+
+    # ── Vignette (static) ────────────────────────────────────────────────
+    vx = (mx - W / 2) / (W / 2)
+    vy = (my - H / 2) / (H / 2)
+    vr = np.sqrt(vx * vx + vy * vy) / np.sqrt(2.0)
+    vignette = (1.0 - 0.32 * np.clip(vr - 0.55, 0, 1) ** 1.6).astype(np.float32)
+    vignette3 = vignette[:, :, None]
+
+    # ── Particle system (prompt-keyed, rendered at quarter res) ──────────
+    if any(k in prompt_lower for k in ["fire", "ember", "explosion", "battle", "war", "spark", "lava"]):
+        p_kind, p_count, p_tint = "embers", 70, (1.0, 0.45, 0.12)
+    elif any(k in prompt_lower for k in ["rain", "storm", "tear", "cry", "sad"]):
+        p_kind, p_count, p_tint = "rain", 110, (0.55, 0.7, 1.0)
+    elif any(k in prompt_lower for k in ["snow", "winter", "cold", "frost"]):
+        p_kind, p_count, p_tint = "snow", 90, (0.9, 0.95, 1.0)
+    elif any(k in prompt_lower for k in ["city", "night", "neon", "party", "club", "bokeh", "lights"]):
+        p_kind, p_count, p_tint = "bokeh", 45, (1.0, 0.85, 0.4)
+    else:
+        p_kind, p_count, p_tint = "dust", 80, (1.0, 0.95, 0.8)
+
+    rng = np.random.default_rng(abs(hash(prompt_lower)) % (2 ** 32))
+    pw, ph = W // 4, H // 4
+    px = rng.uniform(0, pw, p_count)
+    py = rng.uniform(0, ph, p_count)
+    if p_kind == "embers":
+        pvx, pvy = rng.uniform(-6, 6, p_count), rng.uniform(-46, -14, p_count)
+        psz = rng.uniform(1.5, 4.5, p_count)
+    elif p_kind == "rain":
+        pvx, pvy = rng.uniform(-8, -2, p_count), rng.uniform(120, 220, p_count)
+        psz = rng.uniform(1.0, 2.0, p_count)
+    elif p_kind == "snow":
+        pvx, pvy = rng.uniform(-14, 14, p_count), rng.uniform(10, 30, p_count)
+        psz = rng.uniform(1.5, 4.0, p_count)
+    elif p_kind == "bokeh":
+        pvx, pvy = rng.uniform(-5, 5, p_count), rng.uniform(-8, 2, p_count)
+        psz = rng.uniform(4.0, 12.0, p_count)
+    else:  # dust
+        pvx, pvy = rng.uniform(-10, 10, p_count), rng.uniform(-7, 7, p_count)
+        psz = rng.uniform(1.0, 3.0, p_count)
+    p_phase = rng.uniform(0, 2 * math.pi, p_count)
+    p_alpha = rng.uniform(0.25, 0.8, p_count)
+
+    def _camera(t):
+        """Returns (zoom, cx, cy) for the near layer at time t."""
         progress = min(max(t / duration, 0.0), 1.0)
-        
-        H, W, _ = img_arr.shape
-        
         if motion_type == "cinematic_dolly_glide":
             zoom = 1.0 + 0.16 * (1.0 - math.cos(progress * math.pi / 2))
-            cx = W / 2 + (progress - 0.5) * 40
-            cy = H / 2 + (progress - 0.5) * 30
+            cx, cy = W / 2 + (progress - 0.5) * 60, H / 2 + (progress - 0.5) * 44
         elif motion_type == "speed_ramp_punch":
-            curve = progress ** 2.2
-            zoom = 1.0 + 0.28 * curve
-            cx = W / 2
-            cy = H / 2
+            zoom = 1.0 + 0.34 * (progress ** 2.2)
+            cx, cy = W / 2, H / 2
         elif motion_type == "zoom_burst_out":
-            zoom = 1.25 - 0.20 * (1.0 - math.cos(progress * math.pi / 2))
-            cx = W / 2
-            cy = H / 2
+            zoom = 1.30 - 0.24 * (1.0 - math.cos(progress * math.pi / 2))
+            cx, cy = W / 2, H / 2
         elif motion_type == "whip_pan_left":
-            zoom = 1.08 + 0.05 * math.sin(progress * math.pi)
-            cx = W / 2 + (0.5 - progress) * (W * 0.18)
-            cy = H / 2
+            zoom = 1.10 + 0.05 * math.sin(progress * math.pi)
+            cx, cy = W / 2 + (0.5 - progress) * (W * 0.22), H / 2
         elif motion_type == "whip_pan_right":
-            zoom = 1.08 + 0.05 * math.sin(progress * math.pi)
-            cx = W / 2 + (progress - 0.5) * (W * 0.18)
-            cy = H / 2
+            zoom = 1.10 + 0.05 * math.sin(progress * math.pi)
+            cx, cy = W / 2 + (progress - 0.5) * (W * 0.22), H / 2
         elif motion_type == "parallax_drift":
-            zoom = 1.05 + 0.10 * math.sin(progress * math.pi * 0.8)
-            cx = W / 2 + (progress - 0.5) * (W * 0.12)
-            cy = H / 2 + (0.5 - progress) * (H * 0.08)
+            zoom = 1.06 + 0.10 * math.sin(progress * math.pi * 0.8)
+            cx, cy = W / 2 + (progress - 0.5) * (W * 0.14), H / 2 + (0.5 - progress) * (H * 0.10)
         elif motion_type == "camera_shake_micro":
-            jitter_x = math.sin(t * 14.0) * 8 + math.cos(t * 22.0) * 4
-            jitter_y = math.cos(t * 16.0) * 8 + math.sin(t * 28.0) * 4
-            zoom = 1.06 + 0.06 * progress
-            cx = W / 2 + jitter_x
-            cy = H / 2 + jitter_y
-        else:
-            zoom = 1.0 + 0.12 * progress
-            cx = W / 2
-            cy = H / 2
-            
-        crop_w = width / zoom
-        crop_h = height / zoom
-        
-        x1 = int(max(0, min(W - crop_w, cx - crop_w / 2)))
-        y1 = int(max(0, min(H - crop_h, cy - crop_h / 2)))
-        x2 = int(x1 + crop_w)
-        y2 = int(y1 + crop_h)
-        
-        cropped = img_arr[y1:y2, x1:x2]
-        frame_pil = Image.fromarray(cropped).resize((width, height), Image.Resampling.BILINEAR)
-        
-        if motion_type == "lighting_pulse_sweep":
-            enhancer = ImageEnhance.Brightness(frame_pil)
-            frame_pil = enhancer.enhance(1.0 + 0.12 * math.sin(progress * math.pi * 2))
-            
-        return np.array(frame_pil)
+            jx = math.sin(t * 14.0) * 9 + math.cos(t * 22.0) * 5
+            jy = math.cos(t * 16.0) * 9 + math.sin(t * 28.0) * 5
+            zoom = 1.07 + 0.07 * progress
+            cx, cy = W / 2 + jx, H / 2 + jy
+        else:  # lighting_pulse_sweep
+            zoom = 1.0 + 0.14 * progress
+            cx, cy = W / 2 + (progress - 0.5) * 36, H / 2
+        if energetic and t < 0.45:
+            # opening punch-in: quick 5% pop that settles
+            zoom *= 1.0 + 0.05 * math.exp(-t * 7.0)
+        return zoom, cx, cy
+
+    def _sample_layer(layer, zoom, cx, cy, damp=1.0):
+        """Crop-zoom a layer around (cx, cy); damp scales the camera travel."""
+        dcx = W / 2 + (cx - W / 2) * damp
+        dcy = H / 2 + (cy - H / 2) * damp
+        crop_w, crop_h = W / zoom, H / zoom
+        x1 = float(max(0, min(W - crop_w, dcx - crop_w / 2)))
+        y1 = float(max(0, min(H - crop_h, dcy - crop_h / 2)))
+        # bilinear sample via strided integer grid (fast, no PIL per frame)
+        ys = (y1 + np.arange(H) * (crop_h / H)).astype(np.int32).clip(0, H - 1)
+        xs = (x1 + np.arange(W) * (crop_w / W)).astype(np.int32).clip(0, W - 1)
+        return layer[ys[:, None], xs[None, :]]
+
+    def make_frame(t):
+        zoom, cx, cy = _camera(t)
+        progress = min(max(t / duration, 0.0), 1.0)
+
+        # Parallax composite: far layer drifts at 35% of camera travel
+        far = _sample_layer(bg, zoom * 0.985, cx, cy, damp=0.35)
+        near = _sample_layer(fg, zoom, cx, cy, damp=1.0)
+        frame = far * (1.0 - mask3) + near * mask3
+
+        # ── Particles (quarter-res overlay, screen blend) ──
+        ov = Image.new("RGB", (pw, ph), (0, 0, 0))
+        dr = ImageDraw.Draw(ov)
+        qx = (px + pvx * t) % pw
+        qy = (py + pvy * t) % ph
+        for i in range(p_count):
+            flick = 0.6 + 0.4 * math.sin(t * 3.0 + p_phase[i])
+            a = p_alpha[i] * flick
+            r = psz[i]
+            col = tuple(int(c * 255 * a) for c in p_tint)
+            if p_kind == "rain":
+                dr.line([qx[i], qy[i], qx[i] - 1.5, qy[i] - 9], fill=col, width=1)
+            else:
+                dr.ellipse([qx[i] - r, qy[i] - r, qx[i] + r, qy[i] + r], fill=col)
+        part = np.asarray(ov.filter(ImageFilter.GaussianBlur(1.2))
+                          .resize((W, H), Image.Resampling.BILINEAR)).astype(np.float32) / 255.0
+        frame = 1.0 - (1.0 - frame) * (1.0 - np.clip(part * 0.85, 0, 1))
+
+        # ── Light sweep (diagonal band, energetic/glow prompts) ──
+        if motion_type in ("lighting_pulse_sweep", "speed_ramp_punch") or "neon" in prompt_lower:
+            sweep_pos = (progress * 1.6 - 0.3)  # -0.3 → 1.3
+            band = np.exp(-((mx / W + my / H) / 2.0 - sweep_pos) ** 2 / 0.004)
+            sweep_strength = 0.22 if motion_type == "lighting_pulse_sweep" else 0.13
+            frame = 1.0 - (1.0 - frame) * (1.0 + band[:, :, None] * sweep_strength)
+            frame = np.clip(frame, 0, 1)
+            if motion_type == "lighting_pulse_sweep":
+                frame *= 1.0 + 0.10 * math.sin(progress * math.pi * 2)
+
+        # ── Grade: vignette + grain ──
+        frame *= vignette3
+        grain = (np.random.rand(H, W, 1).astype(np.float32) - 0.5) * 0.075
+        frame = np.clip(frame + grain, 0, 1)
+
+        # Downscale canvas → final 1080x1920
+        out = (frame * 255).astype(np.uint8)
+        return np.asarray(Image.fromarray(out).resize((width, height), Image.Resampling.BILINEAR))
 
     clip = VideoClip(make_frame, duration=duration)
     clip.write_videofile(
@@ -1054,13 +1152,11 @@ def _generate_procedural_neural_motion_video(image_path: str, prompt: str, durat
         audio=False,
         logger=None,
         threads=4,
-        preset="ultrafast"
+        preset="ultrafast",
     )
     clip.close()
-    print(f"[video_gen_ai] [Procedural Engine] OK: Dynamic video shot generated: {output_path} ({os.path.getsize(output_path)/1024:.1f} KB)")
+    print(f"[video_gen_ai] [Motion Compositor] OK: {output_path} ({os.path.getsize(output_path)/1024:.1f} KB)")
     return output_path
-
-
 def generate_videos_for_scenes(
     scenes: list,
     output_dir: str,

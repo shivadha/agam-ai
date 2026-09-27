@@ -368,7 +368,7 @@ class WorkflowEngine:
                 result = {"status": "success", "node_type": node_type, "title": script_title}
 
             elif node_type == 'gen-desc':
-                topic = self._find_in_state('topic_title') or self._find_in_state('topic') or 'PulseForge Video'
+                topic = self._find_in_state('topic_title') or self._find_in_state('topic') or 'AGAM Video'
                 desc = self._find_in_state('description')
                 desc_model = str(node_data.get('model', '') or '')
                 # Free-web background agent (ChatGPT Go, $0) for AI-written
@@ -500,11 +500,15 @@ class WorkflowEngine:
                         print(f"[Orchestrator] scene {i + 1}: free-web image -> {os.path.basename(img_path)}")
                     updated_scenes = scenes
                 else:
+                    img_topic = (node_data.get('topic_title')
+                                 or self._find_in_state('topic_title')
+                                 or self._find_in_state('topic') or '')
                     updated_scenes = generate_images_for_scenes(
                         scenes, output_dir,
                         model_name=image_model,
                         custom_api_key=custom_api_key,
-                        visual_style=visual_style
+                        visual_style=visual_style,
+                        topic_title=img_topic,
                     )
                 
                 result = {
@@ -575,7 +579,7 @@ class WorkflowEngine:
                 music_path = self._find_in_state('music_path')
                 # Merge timelines from gen-sfx, meme-sound, audio-agent, ...
                 sfx_timeline = self._collect_sfx_timelines() or None
-                topic_title = self._find_in_state('topic_title') or self._find_in_state('topic') or 'PulseForge Short'
+                topic_title = self._find_in_state('topic_title') or self._find_in_state('topic') or 'AGAM Short'
                 viral_score = float(self._find_in_state('score') or 85.0)
                             
                 if not audio_path or not scenes:

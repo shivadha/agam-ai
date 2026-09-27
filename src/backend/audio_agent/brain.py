@@ -8,7 +8,18 @@ Uses multi-factor scoring: emotion match, energy match, viral score, diversity, 
 import os
 import random
 import json
+import time
 from .library import AudioLibrary
+
+# Cross-video music history: track IDs used in recent videos so the same
+# track never opens two videos in a row. Lives next to the library DB.
+_HISTORY_PATH = os.path.join(
+    os.path.dirname(os.environ.get(
+        "PULSEFORGE_DB_PATH",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))))), "data", "pulseforge.db"))),
+    "music_history.json")
+_HISTORY_KEEP = 12  # remember this many recent videos' tracks
 
 # Emotion-to-music-category mapping
 EMOTION_MUSIC_MAP = {
@@ -59,6 +70,47 @@ class AudioBrain:
     def __init__(self, library: AudioLibrary = None):
         self.lib = library or AudioLibrary()
         self._used_in_session = []  # Track sounds used in current video to enforce diversity
+        self._recent_tracks = self._load_history()
+
+    def _load_history(self):
+        """Track IDs used in recent videos (persisted across runs)."""
+        try:
+            if os.path.exists(_HISTORY_PATH):
+                with open(_HISTORY_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    return [int(x) for x in data if isinstance(x, int)][-_HISTORY_KEEP:]
+        except Exception:
+            pass
+        return []
+
+    def _save_history(self):
+        try:
+            os.makedirs(os.path.dirname(_HISTORY_PATH), exist_ok=True)
+            with open(_HISTORY_PATH, "w", encoding="utf-8") as f:
+                json.dump(self._recent_tracks[-_HISTORY_KEEP:], f)
+        except Exception:
+            pass
+
+    def _record_track_used(self, track_id):
+        """Remember a music track across videos; strongest penalty = most recent."""
+        try:
+            tid = int(track_id)
+        except Exception:
+            return
+        self._recent_tracks = [t for t in self._recent_tracks if t != tid]
+        self._recent_tracks.append(tid)
+        self._recent_tracks = self._recent_tracks[-_HISTORY_KEEP:]
+        self._save_history()
+
+    def _cross_video_penalty(self, track_id):
+        """0.15 for the most recent video's track, decaying for older ones."""
+        try:
+            idx = self._recent_tracks.index(int(track_id))
+        except ValueError:
+            return 1.0
+        recency = (idx + 1) / len(self._recent_tracks)  # 1.0 = most recent
+        return 1.0 - 0.85 * recency
 
     def reset_session(self):
         """Call before processing a new video to reset diversity tracking."""
@@ -104,18 +156,27 @@ class AudioBrain:
         if not scored:
             return None
 
-        # Apply diversity: penalize recently used sounds
+        # Apply diversity: penalize recently used sounds (in-video)
         for item in scored:
             if item["sound"]["id"] in self._used_in_session:
                 item["score"] *= 0.3
+            # Cross-video: a track used in a recent video is heavily penalized
+            # so consecutive videos never open with the same music.
+            item["score"] *= self._cross_video_penalty(item["sound"]["id"])
 
         scored.sort(key=lambda x: x["score"], reverse=True)
-        best = scored[0]["sound"]
-        
-        # Track for diversity
+        # Weighted pick among the top 3 instead of a deterministic top-1:
+        # same emotion no longer means the same track every video.
+        top = scored[:3]
+        weights = [max(0.05, t["score"]) ** 2 for t in top]
+        best = random.choices(top, weights=weights, k=1)[0]["sound"]
+        best_score = next(t["score"] for t in top if t["sound"]["id"] == best["id"])
+
+        # Track for diversity (in-video + cross-video)
         self._used_in_session.append(best["id"])
-        
-        print(f"[AudioBrain] Selected music: '{best['name']}' (score={scored[0]['score']:.2f})")
+        self._record_track_used(best["id"])
+
+        print(f"[AudioBrain] Selected music: '{best['name']}' (score={best_score:.2f})")
         return best
 
     # ──────────────────────────────────────────────────────

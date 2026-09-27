@@ -209,10 +209,12 @@ def _fb_imagegen_swap(engine, node, node_data, inputs, primary_error):
 
     if primary_freeweb:
         from src.backend.image_gen import generate_images_for_scenes
+        fb_topic = (engine._find_in_state('topic_title')
+                    or engine._find_in_state('topic') or '')
         updated = generate_images_for_scenes(
             scenes, OUTPUT_DIR, model_name="DALL-E 3",
             custom_api_key=node_data.get("api_key", ""),
-            visual_style=visual_style)
+            visual_style=visual_style, topic_title=fb_topic)
     else:
         from src.backend.free_agent_client import generate_image_file
         from src.backend.free_prompting import ensure_image_prompts

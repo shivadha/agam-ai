@@ -60,25 +60,97 @@ def _extract_topic_keywords(prompt: str) -> str:
     return " ".join(filtered[:3]) if filtered else "superhero"
 
 
-def _fetch_topic_stock_image(prompt: str, width: int, height: int, output_path: str) -> bool:
+# Scenery words that must never be used ALONE as a stock query — they are
+# what produced the infamous "Batman video with a sky photo" bug. They may
+# only appear inside a multi-word subject query ("gotham sky" is fine).
+_GENERIC_SCENERY = {
+    'sky', 'grass', 'cloud', 'clouds', 'water', 'sunset', 'sunrise', 'background',
+    'landscape', 'nature', 'field', 'fields', 'tree', 'trees', 'ocean', 'sea',
+    'mountain', 'mountains', 'flower', 'flowers', 'road', 'street',
+}
+
+_STYLE_NOISE = {
+    'cinematic', 'hyper-realistic', 'hyperrealistic', 'photorealistic', 'ultra-detailed',
+    'ultradetailed', 'volumetric', 'dramatic', 'moody', 'epic', 'vertical', '8k', '4k',
+    'raw', 'photo', 'photography', 'shot', 'film', 'still', 'frame', 'lighting', 'lens',
+}
+
+
+def _extract_subject_queries(prompt: str, topic: str = "") -> list:
+    """Build ordered stock-search queries anchored on the SUBJECT, not scenery.
+
+    Order: video topic -> quoted phrases -> Capitalized entities ->
+    leading meaningful nouns. Single generic scenery words ('sky', 'grass')
+    are never emitted alone.
     """
-    Searches for high-resolution free stock images specifically matching the topic keywords.
-    Guarantees images match the topic (e.g. Batman) and NEVER returns random fruits or beans.
+    queries = []
+    seen = set()
+
+    def add(q):
+        q = re.sub(r"\s+", " ", (q or "").strip(" ,.-:;!?\"'"))
+        if len(q) >= 3 and q.lower() not in seen:
+            seen.add(q.lower())
+            queries.append(q)
+
+    # 1. The video topic itself is the strongest subject signal.
+    if topic:
+        add(topic)
+
+    text = prompt or ""
+    # 2. Quoted phrases ("Gotham City") are almost always the subject.
+    for m in re.finditer(r'"([^"]{3,60})"', text):
+        add(m.group(1))
+    # 3. Capitalized entity runs (Batman, Gotham City, Eiffel Tower).
+    for m in re.finditer(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b", text):
+        ent = m.group(1)
+        if ent.lower() not in _STYLE_NOISE:
+            add(ent)
+    # 4. Leading meaningful nouns from the cleaned prompt.
+    words = [w.strip(' ,.-:;!?\"\'') for w in text.lower().split()]
+    _weak_lone = {'standing', 'sitting', 'looking', 'shown', 'showcasing',
+                  'featuring', 'with', 'and', 'the', 'for', 'from'}
+    meaningful = [w for w in words
+                  if len(w) > 2 and w not in _STYLE_NOISE and w not in {
+                      'with', 'into', 'across', 'from', 'over', 'under', 'about',
+                      'behind', 'against', 'this', 'that', 'and', 'the', 'for'}]
+    if meaningful:
+        add(" ".join(meaningful[:3]))
+        for w in meaningful[:4]:
+            if w not in _GENERIC_SCENERY and w not in _weak_lone:
+                add(w)
+    return queries
+
+
+def _fetch_topic_stock_image(prompt: str, width: int, height: int, output_path: str,
+                             topic: str = "") -> bool:
     """
-    cleaned = _extract_topic_keywords(prompt)
-    candidates = [cleaned] + [w for w in cleaned.split() if len(w) > 3]
+    Searches for high-resolution free stock images matching the SUBJECT.
+    Every candidate result is validated: the file title must contain at least
+    one subject token, otherwise it is rejected (no more sky photos for a
+    Batman video). Returns False instead of a wrong image.
+    """
+    queries = _extract_subject_queries(prompt, topic)
     headers = {'User-Agent': 'PulseForge/2.0 (MediaBot; admin@pulseforge.local)'}
-    
-    for kw in candidates:
+
+    for query in queries:
+        tokens = {t for t in query.lower().split() if len(t) > 2}
+        # Never search a lone scenery word ("sky") — it can only return junk.
+        if len(tokens) == 1 and next(iter(tokens)) in _GENERIC_SCENERY:
+            continue
         try:
-            query = urllib.parse.quote(kw)
-            api_url = f"https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch={query}&gsrnamespace=6&gsrlimit=4&prop=imageinfo&iiprop=url|mime&format=json"
+            api_url = ("https://commons.wikimedia.org/w/api.php?action=query"
+                       f"&generator=search&gsrsearch={urllib.parse.quote(query)}"
+                       "&gsrnamespace=6&gsrlimit=6&prop=imageinfo&iiprop=url|mime&format=json")
             req = urllib.request.Request(api_url, headers=headers)
             with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
-            
+
             pages = data.get("query", {}).get("pages", {})
             for page_id, page_data in pages.items():
+                title = (page_data.get("title") or "").lower()
+                # Validate: the file must actually be about the subject.
+                if tokens and not any(t in title for t in tokens):
+                    continue
                 img_info = page_data.get("imageinfo", [{}])[0]
                 url = img_info.get("url")
                 if url:
@@ -90,10 +162,10 @@ def _fetch_topic_stock_image(prompt: str, width: int, height: int, output_path: 
                             if len(content) > 10000:
                                 with open(output_path, "wb") as f:
                                     f.write(content)
-                                print(f"[image_gen] [Stock Match] Successfully retrieved '{kw}' from Wikimedia ({len(content)//1024} KB)")
+                                print(f"[image_gen] [Stock Match] '{query}' -> '{page_data.get('title','')[:60]}' ({len(content)//1024} KB)")
                                 return True
         except Exception as e:
-            print(f"[image_gen] Topic stock search for '{kw}' note: {e}")
+            print(f"[image_gen] Topic stock search for '{query}' note: {e}")
 
     return False
 
@@ -122,7 +194,7 @@ def _create_placeholder_image(output_path: str, prompt: str, width: int, height:
     # Add topic text in center
     display_title = keywords[:36] if keywords else "CINEMATIC SCENE"
     draw.text((width // 2, height // 2 - 40), display_title, fill=(241, 245, 249), anchor="mm")
-    draw.text((width // 2, height // 2 + 20), f"SCENE {seed_val} · PULSEFORGE AI", fill=border_color, anchor="mm")
+    draw.text((width // 2, height // 2 + 20), f"SCENE {seed_val} · AGAM AI", fill=border_color, anchor="mm")
     
     img.save(output_path, "JPEG", quality=92)
     print(f"[image_gen] OK: Cinematic contextual artwork generated for '{display_title}' at {output_path}")
@@ -205,6 +277,7 @@ def _generate_image_once(
     scene_index: int = 0,
     total_scenes: int = 1,
     seed: int | None = None,
+    topic: str = "",
 ) -> str | None:
     """
     Single attempt at generating a unique image (no dedup retry here —
@@ -316,8 +389,8 @@ def _generate_image_once(
 
     # ── Attempt 4: Free AI Market Router (Pollinations Turbo & Flux-Realism) ─────
     clean_prompt = re.sub(r'[\r\n\t]+', ' ', enhanced_prompt).strip()
-    if len(clean_prompt) > 220:
-        clean_prompt = clean_prompt[:220]
+    if len(clean_prompt) > 400:
+        clean_prompt = clean_prompt[:400]
     encoded_prompt = urllib.parse.quote(clean_prompt)
     
     poll_headers = {
@@ -340,12 +413,15 @@ def _generate_image_once(
         except Exception as e:
             print(f"[image_gen] Pollinations {model_choice} attempt note: {e}")
 
-    # ── Attempt 3: Topic-Specific Stock Search (Guaranteed Topic Alignment, NO Fruits/Beans) ──
-    print(f"[image_gen] Searching authentic topic stock assets for: '{_extract_topic_keywords(prompt)}'...")
-    if _fetch_topic_stock_image(prompt, width, height, output_path):
+    # ── Attempt 5: Subject-Anchored Stock Search ──
+    # Only accepts results whose title matches the subject; returns False
+    # (→ topic-titled placeholder) instead of an irrelevant photo.
+    _subj = _extract_subject_queries(prompt, topic)
+    print(f"[image_gen] Searching subject-anchored stock assets: '{(_subj[0] if _subj else topic)}'...")
+    if _fetch_topic_stock_image(prompt, width, height, output_path, topic=topic):
         return output_path
 
-    # ── Attempt 4: Dynamic Local Cinematic Poster Artwork (100% Offline & Topic-Aligned) ──
+    # ── Attempt 6: Dynamic Local Cinematic Poster Artwork (100% Offline & Topic-Aligned) ──
     print(f"[image_gen] Rendering contextual cinematic artwork for Scene {scene_index+1}...")
     _create_placeholder_image(output_path, prompt, width, height, seed_val=scene_index + 1)
     return output_path
@@ -368,7 +444,8 @@ def generate_images_for_scenes(
     height: int = 1920,
     model_name: str = "DALL-E 3",
     custom_api_key: str = "",
-    visual_style: str = "cinema_8k"
+    visual_style: str = "cinema_8k",
+    topic_title: str = "",
 ) -> list:
     """
     Generates distinct, non-duplicate images for every scene concurrently in parallel using ThreadPoolExecutor.
@@ -410,7 +487,8 @@ def generate_images_for_scenes(
                 model_name=model_name,
                 custom_api_key=custom_api_key,
                 scene_index=i,
-                total_scenes=total_scenes
+                total_scenes=total_scenes,
+                topic=topic_title or scene.get("topic_title") or "",
             )
             if path and os.path.exists(path):
                 scene['image_paths'].append(path)
@@ -458,6 +536,7 @@ def generate_image(
     scene_index: int = 0,
     total_scenes: int = 1,
     max_attempts: int = 3,
+    topic: str = "",
 ) -> str | None:
     """
     Generates a unique image for a scene.
@@ -475,6 +554,7 @@ def generate_image(
                 prompt, output_path, width=width, height=height,
                 model_name=model_name, custom_api_key=custom_api_key,
                 scene_index=scene_index, total_scenes=total_scenes, seed=seed,
+                topic=topic,
             )
         except Exception as e:
             print(f"[image_gen] Attempt {attempt + 1}/{max_attempts} crashed: {e}")

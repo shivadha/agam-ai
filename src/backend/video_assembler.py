@@ -23,6 +23,115 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
+def _ass_timestamp(sec: float) -> str:
+    sec = max(0.0, sec)
+    return f"{int(sec // 3600)}:{int((sec % 3600) // 60):02d}:{sec % 60:05.2f}"
+
+
+def _esc_ass_text(text: str) -> str:
+    return text.replace("{", "(").replace("}", ")").replace("\n", " ")
+
+
+def _ffmpeg_bin() -> str:
+    """Resolve an ffmpeg binary: system PATH first, else imageio-ffmpeg's."""
+    import shutil
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
+
+def build_caption_ass(caption_events: list, ass_path: str,
+                      highlight_bgr: str = "&H0000FFFF") -> str | None:
+    """Build a karaoke-style ASS file from (words, active_idx, start, end) events.
+
+    Re-chunks the flat word stream into ≤5-word display lines so every line
+    fits the frame (no halfway-cut text), and emits one Dialogue per word
+    with the spoken word highlighted — the Hormozi look, burned reliably by
+    ffmpeg's subtitles filter instead of hundreds of fragile TextClips.
+    """
+    flat = []
+    for (words, _w_idx, w_start, w_end) in caption_events:
+        w = words[_w_idx] if 0 <= _w_idx < len(words) else ""
+        if w:
+            flat.append((_esc_ass_text(str(w)), float(w_start), float(w_end)))
+    if not flat:
+        return None
+
+    chunks = [flat[i:i + 5] for i in range(0, len(flat), 5)]
+    header = (
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n"
+        "WrapStyle: 0\nScaledBorderAndShadow: yes\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        "Style: Cap,Arial,72,&H00FFFFFF,&H00FFFFFF,&H80000000,&H00000000,"
+        "-1,0,0,0,100,100,0,0,1,4,1,2,80,80,380,1\n\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
+        "Effect, Text\n"
+    )
+    WHITE = "&H00FFFFFF"
+    events = []
+    for chunk in chunks:
+        line_words = [w for w, _s, _e in chunk]
+        for j, (word, start, end) in enumerate(chunk):
+            if end <= start:
+                end = start + 0.08
+            parts = []
+            for k, lw in enumerate(line_words):
+                if k == j:
+                    parts.append("{\\c%s}%s{\\c%s}" % (highlight_bgr, lw.upper(), WHITE))
+                else:
+                    parts.append(lw.upper())
+            events.append("Dialogue: 0,%s,%s,Cap,,0,0,0,,%s"
+                          % (_ass_timestamp(start), _ass_timestamp(end), " ".join(parts)))
+    with open(ass_path, "w", encoding="utf-8") as f:
+        f.write(header + "\n".join(events) + "\n")
+    print(f"[video_assembler] Caption ASS built: {len(events)} word events in {len(chunks)} lines.")
+    return ass_path
+
+
+def burn_captions_ass(video_path: str, ass_path: str) -> str:
+    """Burn an ASS subtitle file into the video via ffmpeg. Returns final path.
+
+    The same pass also applies a light film finish (grain + vignette) so the
+    whole video shares one cinematic grade instead of the flat '80s look.
+    """
+    import subprocess
+    if not ass_path or not os.path.exists(ass_path):
+        return video_path
+    ffmpeg = _ffmpeg_bin()
+    # Escape for the subtitles filter (Windows-safe: forward slashes, quote escapes)
+    filt_path = ass_path.replace("\\", "/").replace(":", "\\:").replace("'", "\\'").replace(",", "\\,")
+    vf = (f"subtitles='{filt_path}',"
+          f"noise=alls=6:allf=t,"      # fine film grain, temporally animated
+          f"vignette=angle=PI/4.6")    # gentle edge falloff
+    out_path = os.path.splitext(video_path)[0] + "_captioned.mp4"
+    cmd = [ffmpeg, "-y", "-i", video_path,
+           "-vf", vf,
+           "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+           "-c:a", "copy", out_path]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=600)
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 10000:
+            print(f"[video_assembler] Captions burned: {os.path.basename(out_path)}")
+            try:
+                os.remove(video_path)
+            except Exception:
+                pass
+            return out_path
+    except Exception as e:
+        print(f"[video_assembler] ASS burn failed ({e}); keeping uncaptioned video.")
+    return video_path
+
+
 def parse_srt(srt_path):
     """
     Parses an .srt subtitle file and groups words into 2-3 word chunks for high-retention reading.
@@ -121,9 +230,12 @@ def create_advanced_motion_effect(image_path, duration, width, height, effect_ty
         
     def make_frame(t):
         progress = t / max(duration, 0.01)
-        
+        # Opening punch-in: a quick ~5% scale pop that settles in ~0.4s gives
+        # every scene cut the modern shorts feel (skipped on zoom-out/shake).
+        punch = 1.0 + 0.05 * math.exp(-t * 7.0)
+
         if effect_type in ['zoom_in', 'zoom_burst_in']:
-            zoom = 1.0 + 0.32 * progress
+            zoom = (1.0 + 0.32 * progress) * punch
             return clip.resized(zoom).cropped(x_center=clip.w/2, y_center=clip.h/2, width=width, height=height).get_frame(t)
         elif effect_type in ['zoom_out', 'zoom_burst_out']:
             zoom = 1.3 - 0.28 * progress
@@ -136,7 +248,7 @@ def create_advanced_motion_effect(image_path, duration, width, height, effect_ty
             return clip.resized(1.22).cropped(x_center=(clip.w/2) - x_shift, y_center=clip.h/2, width=width, height=height).get_frame(t)
         elif effect_type == 'speed_ramp':
             # Exponential speed curve
-            zoom = 1.0 + 0.35 * (progress ** 2.2)
+            zoom = (1.0 + 0.35 * (progress ** 2.2)) * punch
             return clip.resized(zoom).cropped(x_center=clip.w/2, y_center=clip.h/2, width=width, height=height).get_frame(t)
         elif effect_type == 'motion_blur_push':
             y_shift = 0.12 * height * progress
@@ -146,7 +258,7 @@ def create_advanced_motion_effect(image_path, duration, width, height, effect_ty
             g_shift = random.choice([-25, 0, 25]) if (0.2 < progress < 0.4 or 0.65 < progress < 0.82) else 0
             return clip.resized(zoom).cropped(x_center=(clip.w/2) + g_shift, y_center=clip.h/2, width=width, height=height).get_frame(t)
         else:
-            zoom = 1.0 + 0.18 * progress
+            zoom = (1.0 + 0.18 * progress) * punch
             return clip.resized(zoom).cropped(x_center=clip.w/2, y_center=clip.h/2, width=width, height=height).get_frame(t)
             
     try:
@@ -477,48 +589,28 @@ def assemble_cinematic_video(
         print(f"[video_assembler] Caption event build note: {e}")
 
     overlay_clips = []
-    font_path = "C:/Windows/Fonts/impact.ttf" if os.path.exists("C:/Windows/Fonts/impact.ttf") else ("C:/Windows/Fonts/arialbd.ttf" if os.path.exists("C:/Windows/Fonts/arialbd.ttf") else "Arial")
-    bp_primary = blueprint.get("caption_color", "#FFE600")
-    bp_accent = blueprint.get("caption_accent", "#00FFAA")
-    karaoke_colors = [bp_primary, bp_accent, "#38BDF8", "#FF3366", "#A855F7"]
-
-    for (words, w_idx, w_start, w_end) in caption_events:
+    # Karaoke captions are built as an ASS file and burned with ffmpeg's
+    # subtitles filter (reliable wrapping, no halfway-cut text). The old
+    # per-word TextClip renderer was fragile — it stays only as a fallback.
+    caption_ass_path = None
+    if caption_events:
         try:
-            active_color = random.choice(karaoke_colors)
+            def _hex_to_ass_bgr(hex_color: str) -> str:
+                h = (hex_color or "#FFE600").lstrip("#")
+                if len(h) != 6:
+                    h = "FFE600"
+                r, g, b = h[0:2], h[2:4], h[4:6]
+                return f"&H00{b}{g}{r}".upper()
 
-            # Active word gets uppercase emphasis and glowing brackets / color
-            display_parts = []
-            for idx_i, w in enumerate(words):
-                if idx_i == w_idx:
-                    display_parts.append(f"\u2605 {w.upper()} \u2605")
-                else:
-                    display_parts.append(w.upper())
-
-            if len(display_parts) > 4:
-                mid = len(display_parts) // 2
-                formatted_line = " ".join(display_parts[:mid]) + chr(10) + " ".join(display_parts[mid:])
-            else:
-                formatted_line = " ".join(display_parts)
-
-            font_size = 56 if len(formatted_line) < 20 else 48
-
-            txt_clip = TextClip(
-                font=font_path,
-                text=formatted_line,
-                font_size=font_size,
-                color=active_color,
-                stroke_color="black",
-                stroke_width=5.0,
-                method="caption",
-                size=(860, None),
-                text_align="center"
-            )
-            txt_clip = txt_clip.with_start(w_start).with_end(w_end)
-            # Golden Safe-Zone: y = 1120 (Centered, strictly clear of YouTube Shorts overlay UI)
-            txt_clip = txt_clip.with_position(('center', 1120))
-            overlay_clips.append(txt_clip)
+            bp_primary = blueprint.get("caption_color", "#FFE600")
+            ass_path = os.path.join(os.path.dirname(os.path.abspath(output_path)),
+                                    f"captions_{os.path.splitext(os.path.basename(output_path))[0]}.ass")
+            caption_ass_path = build_caption_ass(
+                caption_events, ass_path,
+                highlight_bgr=_hex_to_ass_bgr(bp_primary))
         except Exception as e:
-            print(f"[video_assembler] Karaoke subtitle rendering note: {e}")
+            print(f"[video_assembler] Caption ASS build note: {e}")
+            caption_ass_path = None
 
     # Retention Progress Bar
     try:
@@ -545,6 +637,10 @@ def assemble_cinematic_video(
     # Close streams
     audio_clip.close()
     mixed_audio.close()
+
+    # Burn karaoke captions into the final video (ASS via ffmpeg).
+    if caption_ass_path:
+        output_path = burn_captions_ass(output_path, caption_ass_path)
     
     # Record render in Creative AI Brain for continuous learning
     try:
