@@ -152,7 +152,7 @@ const NODE_CONFIGS = {
         { key:'keywords', label:'Focus Keywords', type:'text', placeholder:'AI, automation, YouTube...', def:'' },
     ],
     'tts': [
-        { key:'voice',    label:'Voice',         type:'select', opts:['Kokoro-82M (af_heart) [Local Free]','Kokoro-82M (am_adam) [Local Free]','Fish Audio S2.1 (Free API)','en-US-ChristopherNeural (Edge)','en-US-JennyNeural (Edge)','en-GB-RyanNeural (Edge)'], def:'Kokoro-82M (af_heart) [Local Free]' },
+        { key:'voice',    label:'Voice',         type:'select', opts:['Kokoro-82M (af_heart) [Local Free]','Kokoro-82M (am_adam) [Local Free]','OmniVoice (Local Free)','Fish Audio S2.1 (Free API)','en-US-ChristopherNeural (Edge)','en-US-JennyNeural (Edge)','en-GB-RyanNeural (Edge)'], def:'Kokoro-82M (af_heart) [Local Free]' },
         { key:'voice_preset', label:'Signature Voice Preset (overrides voice)', type:'text', placeholder:'e.g. my-channel-voice', def:'' },
         { key:'speed',    label:'Speed',         type:'range',  min:0.5, max:2.0, step:0.1, def:1.1 },
         { key:'language', label:'Language',      type:'select', opts:['English','Hindi','Spanish','French','Japanese'], def:'English' },

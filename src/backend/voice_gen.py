@@ -164,6 +164,143 @@ def _generate_audio_fish(text: str, output_path: str, voice: str = "fish", api_k
     return output_path, None
 
 
+OMNIVOICE_MODEL = "k2-fsa/OmniVoice"
+
+
+def _omnivoice_available() -> bool:
+    """True when the `omnivoice` package is importable (no torch import here)."""
+    import importlib.util
+    return importlib.util.find_spec("omnivoice") is not None
+
+
+def _parse_omnivoice_voice(voice: str) -> dict:
+    """Parse the OmniVoice voice spec into a worker kwargs dict.
+
+    Accepted forms (case-insensitive prefix):
+      omni | OmniVoice (Local Free)            -> auto voice
+      omni:design:<instruct>                   -> voice design, e.g.
+                                                 omni:design:female, low pitch, indian accent
+      omni:clone:<ref_audio_path>              -> voice cloning from a wav file
+      omni:clone:<ref_audio_path>|<ref_text>   -> ...with manual transcript
+    A bare existing .wav/.mp3 path is also treated as a clone reference.
+    OMNIVOICE_REF_AUDIO env var is used when the spec is bare "omni".
+    """
+    v = (voice or "").strip()
+    low = v.lower()
+    spec = {"mode": "auto", "instruct": None, "ref_audio": None, "ref_text": None}
+    if low.startswith("omni:"):
+        body = v[5:]
+    elif low == "omni" or low.startswith("omnivoice"):
+        # Bare "omni" or the UI label "OmniVoice (Local Free)" -> auto voice,
+        # unless OMNIVOICE_REF_AUDIO pins a clone reference.
+        body = ""
+    else:
+        body = v
+
+    bl = body.strip().lower()
+    if bl.startswith("design:"):
+        spec["mode"] = "design"
+        spec["instruct"] = body.strip()[7:].strip() or None
+    elif bl.startswith("clone:"):
+        spec["mode"] = "clone"
+        rest = body.strip()[6:].strip()
+        if "|" in rest:
+            ref, ref_text = rest.split("|", 1)
+            spec["ref_audio"] = ref.strip() or None
+            spec["ref_text"] = ref_text.strip() or None
+        else:
+            spec["ref_audio"] = rest or None
+    elif body.strip() and os.path.exists(body.strip()):
+        spec["mode"] = "clone"
+        spec["ref_audio"] = body.strip()
+    elif not body.strip():
+        env_ref = os.environ.get("OMNIVOICE_REF_AUDIO", "").strip()
+        if env_ref:
+            spec["mode"] = "clone"
+            spec["ref_audio"] = env_ref
+    if spec["mode"] == "design" and not spec["instruct"]:
+        spec = {"mode": "auto", "instruct": None, "ref_audio": None, "ref_text": None}
+    return spec
+
+
+def _generate_audio_omnivoice(text: str, output_path: str, voice: str = "omni",
+                              speed: float = 1.0, language: str = "English",
+                              num_step: int = 32):
+    """Generate audio via local OmniVoice (k2-fsa/OmniVoice — free, Apache-2.0).
+
+    Runs src/backend/omnivoice_synthesize.py in a subprocess so the web app
+    never imports torch; the model loads once per call and VRAM is released
+    when the worker exits. Raises RuntimeError on any failure — the caller
+    falls back to Edge-TTS.
+    """
+    import subprocess
+    import sys
+    import tempfile
+
+    if not _omnivoice_available():
+        raise RuntimeError(
+            "OmniVoice is not installed. Run `python scripts/install_local.py` "
+            "(or install_local.bat on Windows) after pulling — it installs the "
+            "`omnivoice` package and pre-downloads the k2-fsa/OmniVoice model.")
+
+    spec = _parse_omnivoice_voice(voice)
+    if spec["mode"] == "clone" and spec["ref_audio"] and not os.path.exists(spec["ref_audio"]):
+        raise RuntimeError(f"OmniVoice clone reference not found: {spec['ref_audio']}")
+
+    helper = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "omnivoice_synthesize.py")
+    tmpdir = tempfile.mkdtemp(prefix="omnivoice_")
+    text_file = os.path.join(tmpdir, "input.txt")
+    wav_tmp = os.path.join(tmpdir, "out.wav")
+    with open(text_file, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+    cmd = [sys.executable, helper,
+           "--text-file", text_file,
+           "--output", wav_tmp,
+           "--model", os.environ.get("OMNIVOICE_MODEL", OMNIVOICE_MODEL),
+           "--language", language or "English",
+           "--speed", str(speed or 1.0),
+           "--num_step", str(num_step or 32)]
+    if spec["instruct"]:
+        cmd += ["--instruct", spec["instruct"]]
+    if spec["ref_audio"]:
+        cmd += ["--ref_audio", spec["ref_audio"]]
+    if spec["ref_text"]:
+        cmd += ["--ref_text", spec["ref_text"]]
+
+    print(f"[VoiceGen] OmniVoice local TTS ({spec['mode']}) — {len(text)} chars...")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1500)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("OmniVoice synthesis timed out (25 min) — model may still "
+                           "be downloading on first run.")
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "")[-600:]
+        raise RuntimeError(f"OmniVoice worker failed (exit {proc.returncode}): {tail}")
+    if not os.path.exists(wav_tmp) or os.path.getsize(wav_tmp) < 1024:
+        raise RuntimeError("OmniVoice produced no usable audio.")
+
+    if output_path.endswith(".mp3"):
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", wav_tmp, "-b:a", "192k", output_path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+    else:
+        import shutil as _sh
+        _sh.copyfile(wav_tmp, output_path)
+    try:
+        import shutil as _sh2
+        _sh2.rmtree(tmpdir, ignore_errors=True)
+    except Exception:
+        pass
+    if not os.path.exists(output_path) or os.path.getsize(output_path) < 1024:
+        raise RuntimeError("OmniVoice finished but the output file is missing/empty.")
+    print(f"[VoiceGen] OmniVoice saved -> {os.path.basename(output_path)}")
+    # No word-level timings from the worker; the orchestrator's
+    # transcribe_word_timings() runs faster-whisper on this file automatically.
+    return output_path, None
+
+
 def _generate_audio_elevenlabs(text: str, output_path: str, voice_id: str = "21m00Tcm4TlvDq8ikWAM", api_key: str = None):
     """
     Generate audio via ElevenLabs TTS API and synthesize matching SRT subtitle timings.
@@ -312,7 +449,7 @@ def _generate_audio_kokoro(text: str, output_path: str, voice: str = "af_heart")
 
 
 def _resolve_tts_provider(voice: str, provider: str) -> str:
-    """Decide which TTS engine renders a request: kokoro | edge-tts | elevenlabs | fish.
+    """Decide which TTS engine renders a request: kokoro | edge-tts | elevenlabs | fish | omnivoice.
 
     Edge neural voices (e.g. en-IN-PrabhatNeural) ALWAYS go to Edge-TTS —
     Kokoro can't render those voice IDs and would silently swap in af_heart,
@@ -324,6 +461,8 @@ def _resolve_tts_provider(voice: str, provider: str) -> str:
         return "elevenlabs"
     if v.startswith("fish") or p == "fish":
         return "fish"
+    if v.startswith(("omni", "omnivoice")) or p == "omnivoice":
+        return "omnivoice"
     if v.startswith(("af_", "am_", "kokoro")):
         return "kokoro"
     if "neural" in v:
@@ -333,7 +472,8 @@ def _resolve_tts_provider(voice: str, provider: str) -> str:
     return p  # explicit provider choice respected
 
 
-def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", provider: str = "kokoro", api_key: str = None):
+def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", provider: str = "kokoro", api_key: str = None,
+                 speed: float = 1.0, language: str = "English"):
     """
     Generates an audio file from the given text.
     Supports:
@@ -342,6 +482,10 @@ def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", 
       3. ElevenLabs: Premium voice cloning (requires ELEVENLABS_API_KEY).
       4. Fish Audio: Free s2.1-pro-free tier (requires FISH_AUDIO_KEY); any
          failure falls back to Edge-TTS automatically.
+      5. OmniVoice: Local, 100% free (k2-fsa/OmniVoice, Apache-2.0) — auto
+         voice, voice design ("omni:design:<instruct>") and zero-shot voice
+         cloning ("omni:clone:<ref.wav>[|<ref_text>]"); any failure falls
+         back to Edge-TTS automatically. Install: scripts/install_local.py.
     Saves the output to C:\\AI_project\\output\\ or the specified path.
     Returns (audio_path, srt_path).
     """
@@ -385,6 +529,17 @@ def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", 
             except Exception as fe:
                 print(f"[VoiceGen] Fish Audio failed ({fe}). Falling back to Edge-TTS...")
                 resolved = "edge-tts"
+
+    # OmniVoice (local, free, Apache-2.0). The worker runs in a subprocess so
+    # the web app never imports torch; VRAM is released when it exits. ANY
+    # failure falls back to Edge-TTS so a render never dies on it.
+    if resolved == "omnivoice":
+        try:
+            return _generate_audio_omnivoice(text, output_path, voice=voice,
+                                             speed=speed, language=language)
+        except Exception as oe:
+            print(f"[VoiceGen] OmniVoice failed ({oe}). Falling back to Edge-TTS...")
+            resolved = "edge-tts"
 
     # Primary recommendation: Kokoro-82M (ElevenLabs quality, 100% free local)
     is_kokoro = resolved == "kokoro"

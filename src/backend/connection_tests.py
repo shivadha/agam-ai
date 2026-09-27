@@ -326,9 +326,19 @@ def test_image(model_name: str = "", api_key: str = "") -> dict:
 # TTS nodes
 # ---------------------------------------------------------------------------
 
-def test_tts(provider: str = "", api_key: str = "") -> dict:
+def test_tts(provider: str = "", api_key: str = "", voice: str = "") -> dict:
     t0 = time.time()
     prov = (provider or "").lower()
+    v = (voice or "").lower()
+
+    if "omni" in prov or "omni" in v:
+        import importlib.util
+        import shutil
+        if importlib.util.find_spec("omnivoice") is not None or shutil.which("omnivoice-infer"):
+            return _ok("OmniVoice", "OmniVoice local TTS installed (k2-fsa/OmniVoice, free).", t0)
+        return _fail("OmniVoice selected but the 'omnivoice' package is not installed. "
+                     "Run scripts/install_local.py (install_local.bat on Windows) after pulling.",
+                     t0, "OmniVoice")
 
     if "kokoro" in prov:
         try:
@@ -489,7 +499,7 @@ def test_node(node_type: str, config: dict | None) -> dict:
         if kind == "image":
             return test_image(config.get("model", ""), config.get("api_key", ""))
         if kind == "tts":
-            return test_tts(config.get("provider", ""), config.get("api_key", ""))
+            return test_tts(config.get("provider", ""), config.get("api_key", ""), config.get("voice", ""))
         if kind == "video":
             return test_video(config.get("provider", ""), config.get("api_key", ""))
         if kind == "youtube":
