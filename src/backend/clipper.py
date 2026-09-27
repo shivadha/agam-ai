@@ -71,6 +71,52 @@ def _esc_ass(text):
     return text.replace("\n", " ")
 
 
+_NB_HYPHEN = "‑"  # U+2011 non-breaking hyphen
+_HYPHEN_RE = re.compile("[\\u002D\\u2010\\u2011\\u2012\\u2013\\u2212]")
+
+
+def _sanitize_caption_word(word: str) -> str:
+    """Keep hyphenated compounds on one line.
+
+    libass WrapStyle 0 breaks "LIVE-ACTION" into "LIVE" / "-ACTION" with a
+    dangling hyphen at the start of the next line. Every hyphen/dash
+    variant becomes a non-breaking hyphen so the break can never happen,
+    without changing how the word reads.
+    """
+    return _HYPHEN_RE.sub(_NB_HYPHEN, word)
+
+
+def _reflow_leading_hyphens(chunks: list) -> list:
+    """Ensure no rendered caption line starts with a hyphen.
+
+    Chunks are lists of (word, payload) tuples. If a chunk's first word
+    begins with a hyphen (e.g. the transcriber emitted "-ACTION" as its
+    own word), strip it and move the word back onto the previous line
+    when there is one; a lone "-" fragment is dropped.
+    """
+    hyphens = "\u002D\u2010\u2011\u2012\u2013\u2212"
+    out = []
+    for chunk in chunks:
+        chunk = list(chunk)
+        while chunk:
+            w, payload = chunk[0]
+            stripped = w.lstrip(hyphens)
+            if stripped == w:
+                break
+            if not stripped:
+                chunk.pop(0)
+                continue
+            if out and out[-1]:
+                out[-1].append((stripped, payload))
+                chunk.pop(0)
+            else:
+                chunk[0] = (stripped, payload)
+                break
+        if chunk:
+            out.append(chunk)
+    return out
+
+
 def _write_ass_karaoke(window_words, ass_path, offset=0.0,
                        highlight="yellow", max_words_per_line=_MAX_WORDS_PER_LINE,
                        font_size=_FONT_SIZE, alignment=2, margin_v=_MARGIN_V):
@@ -106,17 +152,19 @@ def _write_ass_karaoke(window_words, ass_path, offset=0.0,
         "Effect, Text\n"
     )
     events = []
-    words = [_esc_ass(w["word"]) for w in window_words]
+    words = [_sanitize_caption_word(_esc_ass(w["word"])) for w in window_words]
     # Chunk into short lines so at most N words are on screen at once.
-    chunks = [window_words[i:i + max_words_per_line]
-              for i in range(0, len(window_words), max_words_per_line)]
-    wi = 0
+    # Reflowed so no line starts with a dangling hyphen.
+    paired = list(zip(words, window_words))
+    chunks = _reflow_leading_hyphens(
+        [[(w, d) for w, d in paired[i:i + max_words_per_line]]
+         for i in range(0, len(paired), max_words_per_line)])
     for chunk in chunks:
-        line_words = words[wi:wi + len(chunk)]
-        for j, w in enumerate(chunk):
+        line_words = [w for w, _d in chunk]
+        for j, (lw, w) in enumerate(chunk):
             start = w["start"] - offset
             if j + 1 < len(chunk):
-                end = chunk[j + 1]["start"] - offset
+                end = chunk[j + 1][1]["start"] - offset
             else:
                 end = w["end"] - offset + 0.12  # hold the last word briefly
             if end <= start:
@@ -132,7 +180,6 @@ def _write_ass_karaoke(window_words, ass_path, offset=0.0,
                 "Dialogue: 0,%s,%s,Clip,,0,0,0,,%s"
                 % (_ass_time(start), _ass_time(end), text)
             )
-        wi += len(chunk)
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(header + "\n".join(events) + "\n")
     return ass_path
@@ -163,20 +210,18 @@ def _write_srt_classic(window_words, ass_path, offset=0.0,
         "Effect, Text\n"
     )
     events = []
-    chunk = []
-    for w in window_words:
-        chunk.append(w)
-        if len(chunk) >= max_words_per_line:
-            start = chunk[0]["start"] - offset
-            end = chunk[-1]["end"] - offset + 0.12
-            text = _esc_ass(" ".join(x["word"] for x in chunk))
-            events.append("Dialogue: 0,%s,%s,Clip,,0,0,0,,%s"
-                          % (_ass_time(start), _ass_time(end), text))
-            chunk = []
-    if chunk:
-        start = chunk[0]["start"] - offset
-        end = chunk[-1]["end"] - offset + 0.12
-        text = _esc_ass(" ".join(x["word"] for x in chunk))
+    # Build sanitized word chunks first so a leading-hyphen word can be
+    # reflowed onto the previous line instead of dangling at a line start.
+    raw_chunks = [window_words[i:i + max_words_per_line]
+                  for i in range(0, len(window_words), max_words_per_line)]
+    word_chunks = _reflow_leading_hyphens(
+        [[(_sanitize_caption_word(_esc_ass(x["word"])), x) for x in rc]
+         for rc in raw_chunks])
+    for chunk in word_chunks:
+        dicts = [d for _w, d in chunk]
+        start = dicts[0]["start"] - offset
+        end = dicts[-1]["end"] - offset + 0.12
+        text = " ".join(w for w, _d in chunk)
         events.append("Dialogue: 0,%s,%s,Clip,,0,0,0,,%s"
                       % (_ass_time(start), _ass_time(end), text))
     with open(ass_path, "w", encoding="utf-8") as f:

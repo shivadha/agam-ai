@@ -34,6 +34,24 @@ def _esc_ass_text(text: str) -> str:
 
 _NB_HYPHEN = "‑"  # U+2011 non-breaking hyphen
 
+# Hyphen/dash variants that libass WrapStyle 0 can break after, leaving a
+# dangling hyphen at the start of the next line ("LIVE-ACTION" -> "LIVE" /
+# "-ACTION"). Every one of them is normalized to the non-breaking hyphen so
+# a compound can never split mid-word.
+_HYPHEN_RE = re.compile("[\u002D\u2010\u2011\u2012\u2013\u2212]")
+
+
+def _sanitize_caption_word(word: str) -> str:
+    """Escape ASS control chars and keep hyphenated compounds on one line.
+
+    libass smart-wrapping breaks "LIVE-ACTION" into "LIVE" / "-ACTION" with a
+    dangling hyphen. Every hyphen/dash variant becomes a non-breaking hyphen
+    so the break can never happen, without changing how the word reads.
+    """
+    w = _esc_ass_text(word)
+    return _HYPHEN_RE.sub(_NB_HYPHEN, w)
+
+
 # At Arial Bold 72 on a 1080px frame with 80px side margins, ~20 uppercase
 # characters fit on one line. Fixed 5-word chunks overflowed, and libass
 # WrapStyle 0 then broke hyphenated compounds mid-word ("LIVE-ACTION" ->
@@ -42,15 +60,35 @@ _MAX_LINE_CHARS = 20
 _MAX_CHUNK_WORDS = 6
 
 
-def _sanitize_caption_word(word: str) -> str:
-    """Escape ASS control chars and keep hyphenated compounds on one line.
+def _reflow_leading_hyphens(chunks: list) -> list:
+    """Ensure no rendered caption line starts with a hyphen.
 
-    libass smart-wrapping breaks "LIVE-ACTION" into "LIVE" / "-ACTION" with a
-    dangling hyphen. A non-breaking hyphen between alphanumerics stops the
-    break without changing how the word reads.
+    If a chunk's first word still begins with a hyphen (e.g. the
+    transcriber emitted "-ACTION" as its own word), strip the leading
+    hyphen and move the word back onto the previous line when there is
+    one; a lone "-" fragment is dropped. Returns the chunk list.
     """
-    w = _esc_ass_text(word)
-    return re.sub(r"(?<=[A-Za-z0-9])-(?=[A-Za-z0-9])", _NB_HYPHEN, w)
+    hyphens = "\u002D\u2010\u2011\u2012\u2013\u2212"
+    out = []
+    for chunk in chunks:
+        chunk = list(chunk)
+        while chunk:
+            w, s, e = chunk[0]
+            stripped = w.lstrip(hyphens)
+            if stripped == w:
+                break  # no leading hyphen on this line
+            if not stripped:
+                chunk.pop(0)  # lone "-" fragment: drop it
+                continue
+            if out and out[-1]:
+                out[-1].append((stripped, s, e))
+                chunk.pop(0)
+            else:
+                chunk[0] = (stripped, s, e)
+                break
+        if chunk:
+            out.append(chunk)
+    return out
 
 
 def _ffmpeg_bin() -> str:
@@ -105,6 +143,9 @@ def build_caption_ass(caption_events: list, ass_path: str,
         cur_len += need
     if cur:
         chunks.append(cur)
+    # Final safety: no rendered line may start with a hyphen (reflow the
+    # word back onto the previous line).
+    chunks = _reflow_leading_hyphens(chunks)
     header = (
         "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n"
         "WrapStyle: 0\nScaledBorderAndShadow: yes\n\n"

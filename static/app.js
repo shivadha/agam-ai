@@ -983,12 +983,12 @@ async function loadMusicTracks() {
     const list = document.getElementById('musicTrackList');
     if (!list) return;
     try {
-        const r = await fetch('/api/audio-library?category=music&downloaded=1&per_page=24');
+        const r = await fetch('/api/studio/music?per_page=60');
         const d = await r.json();
-        const sounds = (d.sounds || []).filter(s => s.has_local_file);
+        const sounds = (d.tracks || []).filter(s => s.play_url);
         list.innerHTML = '';
         if (!sounds.length) {
-            list.innerHTML = '<div class="clip-muted">No downloaded music yet — grab some from the audio library first.</div>';
+            list.innerHTML = '<div class="clip-muted">No music yet — hit "🔥 Get more viral tracks" to download free tracks.</div>';
             return;
         }
         let previewAudio = null;
@@ -998,7 +998,8 @@ async function loadMusicTracks() {
             row.innerHTML =
                 '<button class="clip-track-play" title="Preview">▶</button>' +
                 '<span class="clip-track-name"></span>' +
-                '<span class="clip-track-dur">' + (s.duration_sec ? fmtTime(s.duration_sec) : '') + '</span>';
+                '<span class="clip-track-dur">' + (s.duration_sec ? fmtTime(s.duration_sec) : '') + '</span>' +
+                (s.has_local_file ? '' : '<span class="clip-track-dl" title="Streams remotely; downloads automatically when mixed">⬇</span>');
             row.querySelector('.clip-track-name').textContent = s.name || ('Track ' + s.id);
             const playBtn = row.querySelector('.clip-track-play');
             playBtn.addEventListener('click', (ev) => {
@@ -1021,6 +1022,29 @@ async function loadMusicTracks() {
         });
     } catch (e) {
         list.innerHTML = '<div class="clip-muted">Could not load tracks.</div>';
+    }
+}
+
+async function fetchMoreMusicTracks() {
+    setClipStatus('musicMixStatus', '🔥 Fetching free viral tracks… this takes a minute.');
+    try {
+        const r = await fetch('/api/studio/music/fetch-more', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({max_downloads: 25}),
+        });
+        const d = await r.json();
+        if (d.status !== 'queued') { setClipStatus('musicMixStatus', d.message || 'Fetch failed.', 'error'); return; }
+        await pollStudioJob('/api/studio/music/fetch-status', d.job_id, (err, res) => {
+            if (err) { setClipStatus('musicMixStatus', err, 'error'); }
+            else {
+                const n = (res.stats && res.stats.total_downloaded) || 0;
+                setClipStatus('musicMixStatus',
+                    '✅ Added ' + n + ' new track' + (n === 1 ? '' : 's') + ' to the sound library.', 'ok');
+                loadMusicTracks();
+            }
+        }, 'musicMixStatus', 'Fetching tracks');
+    } catch (e) {
+        setClipStatus('musicMixStatus', 'Request failed: ' + e.message, 'error');
     }
 }
 
@@ -1333,6 +1357,7 @@ function initClipStudio() {
     $('musicVolume').addEventListener('input', (e) => {
         $('musicVolumeVal').textContent = parseFloat(e.target.value).toFixed(2);
     });
+    $('fetchMusicBtn').addEventListener('click', fetchMoreMusicTracks);
     $('mixMusicBtn').addEventListener('click', async () => {
         if (!clipStudio.videoFile) { showToast('Pick a video first.', 'error'); return; }
         if (!clipStudio.soundId) { showToast('Pick a music track first.', 'error'); return; }
