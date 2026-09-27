@@ -100,11 +100,11 @@ const NDEFS = {
 // Node-specific config schemas
 const NODE_CONFIGS = {
     'extract-viral-angle': [
-        { key:'model',     label:'AI Model',      type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen3.5)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
+        { key:'model',     label:'AI Model',      type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
         { key:'api_key',   label:'API Key (Optional)', type:'text', placeholder:'Leave blank to use key from .env', def:'' },
     ],
     'gen-hook': [
-        { key:'model',     label:'AI Model',      type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen3.5)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
+        { key:'model',     label:'AI Model',      type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
         { key:'api_key',   label:'API Key (Optional)', type:'text', placeholder:'Leave blank to use key from .env', def:'' },
     ],
     'gen-scene-breakdown': [
@@ -132,7 +132,7 @@ const NODE_CONFIGS = {
         { key:'topic',    label:'Saved Article', type:'select', opts:['Loading...'], def:'Loading...' },
     ],
     'gen-script': [
-        { key:'model',    label:'AI Model',     type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','OpenRouter (Free Models)','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen3.5)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
+        { key:'model',    label:'AI Model',     type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','OpenRouter (Free Models)','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
         { key:'api_key',  label:'API Key (Optional)', type:'text', placeholder:'Leave blank – uses GROQ_API_KEY from .env', def:'' },
         { key:'shorts_length', label:'Shorts Length', type:'select', opts:['30 seconds','45 seconds','60 seconds'], def:'45 seconds' },
         { key:'style',    label:'Video Style',  type:'select', opts:['Viral Short','Informative','Educational','Entertaining','Tutorial'], def:'Viral Short' },
@@ -142,7 +142,7 @@ const NODE_CONFIGS = {
         { key:'reference_url', label:'Reference Short URL', type:'text', placeholder:'Paste any YouTube Short URL to copy frame-by-frame...', def:'' },
         { key:'topic_title',   label:'New Topic', type:'text', placeholder:'Topic for the NEW script (e.g. AI gadgets)', def:'' },
         { key:'custom_script', label:'Custom Script (Optional)', type:'textarea', placeholder:'Or paste your own full script — it will be split across the reference shots', def:'' },
-        { key:'model',         label:'AI Model', type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','OpenRouter (Free Models)','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen3.5)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
+        { key:'model',         label:'AI Model', type:'select', opts:['Groq (Qwen 3.8 27B) [Free]','OpenRouter (Free Models)','Meta Muse Spark 1.3 [Muse]','Groq (GPT-OSS 20B) [Free]','Gemini 2.0 Flash [Free]','GPT-4o','Ollama (deepseek-r1)','Ollama (qwen3)','Ollama (qwen2.5-coder)'], def:'Groq (Qwen 3.8 27B) [Free]' },
     ],
     'translate': [
         { key:'lang',     label:'Target Language', type:'select', opts:['Hindi','Spanish','French','German','Japanese','Portuguese'], def:'Hindi' },

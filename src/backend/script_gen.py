@@ -21,9 +21,6 @@ def _generate_ollama(model_name: str, system_prompt: str, user_prompt: str) -> s
         ollama_model = "shivam-pro" if ":" in model_name else "shivam-pro:latest"
     elif "deepseek-r1" in model_name.lower():
         ollama_model = "deepseek-r1" if ":" in model_name else "deepseek-r1:latest"
-    elif "qwen3.5" in model_name.lower():
-        # Qwen3.5 9B fits 6GB VRAM and beats qwen3:8b — keep the exact tag.
-        ollama_model = model_name.lower() if ":" in model_name else "qwen3.5:9b"
     elif "qwen3" in model_name.lower():
         ollama_model = "qwen3:8b" if "8b" not in model_name else model_name.lower()
     elif "qwen2.5-coder" in model_name.lower() or "qwen" in model_name.lower():
