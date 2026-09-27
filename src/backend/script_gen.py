@@ -1,6 +1,8 @@
 import os
 import json
+import random
 import re
+import time
 import requests
 from dotenv import load_dotenv
 load_dotenv()
@@ -360,19 +362,29 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
                 print(f"[script_gen] [{tag}] Cerebras attempt failed ({cb_model}): {cb_err}")
 
     # 6. Free Online Pollinations Text AI Engine
+    # NOTE (2026-09-27 loop-test): the default model behind text.pollinations.ai
+    # is currently a reasoning model that returns its chain-of-thought wrapped
+    # as {"role":"assistant","reasoning":"..."} instead of the requested JSON,
+    # and identical prompts hit a poisoned cache. Pin model=openai (clean,
+    # non-reasoning) VIA THE QUERY STRING — the legacy POST endpoint ignores
+    # "model" inside the JSON body — and send a random seed per call to bust
+    # the cache.
     if not content_str:
         print(f"[script_gen] [{tag}] Routing via Free Zero-Key Pollinations engine...")
         try:
+            _seed = random.randint(1, 999999999)
             poll_resp = requests.post(
-                "https://text.pollinations.ai/",
+                f"https://text.pollinations.ai/?model=openai&seed={_seed}",
                 json={
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    "jsonMode": True
+                    "jsonMode": True,
+                    "model": "openai",
+                    "seed": _seed,
                 },
-                timeout=35
+                timeout=90
             )
             if poll_resp.ok and poll_resp.text:
                 content_str = poll_resp.text
@@ -486,18 +498,59 @@ def gather_topic_context(topic_title: str, article_url: str = "", article_summar
 
 
 def _parse_script_json(content_str: str, topic_title: str) -> dict | None:
-    """Parse the director-script JSON; returns None when unparseable."""
-    try:
-        cleaned_str = content_str.strip()
-        if cleaned_str.startswith("```"):
-            cleaned_str = cleaned_str.split("```")[1]
-            if cleaned_str.startswith("json"):
-                cleaned_str = cleaned_str[4:]
-        cleaned_str = cleaned_str.strip("` \n\t")
-        return json.loads(cleaned_str)
-    except Exception as err:
-        print(f"[script_gen] JSON Parsing failed: {err}. Raw response was: {content_str[:200]}")
-        return None
+    """Parse the director-script JSON; returns None when unparseable.
+
+    Tolerant: strips markdown fences, then falls back to balanced-brace
+    extraction so leading/trailing prose from free models doesn't kill
+    the whole run (2026-09-27 loop-test: reasoning dumps / preamble).
+    """
+    def _try_parse(text: str):
+        try:
+            return json.loads(text)
+        except Exception:
+            return None
+
+    cleaned_str = content_str.strip()
+    if cleaned_str.startswith("```"):
+        cleaned_str = cleaned_str.split("```")[1]
+        if cleaned_str.startswith("json"):
+            cleaned_str = cleaned_str[4:]
+    cleaned_str = cleaned_str.strip("` \n\t")
+    parsed = _try_parse(cleaned_str)
+    if isinstance(parsed, dict):
+        return parsed
+    # Balanced-brace scan: find the largest {...} span that parses.
+    best = None
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(cleaned_str):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    cand = _try_parse(cleaned_str[start:i + 1])
+                    if isinstance(cand, dict):
+                        best = cand  # keep the largest valid span
+    if best is not None:
+        return best
+    print(f"[script_gen] JSON Parsing failed. Raw response was: {content_str[:200]}")
+    return None
 
 
 def _validate_and_repair_scenes(raw_scenes: list, topic_title: str, visual_style: str) -> list:
@@ -535,6 +588,90 @@ def _validate_and_repair_scenes(raw_scenes: list, topic_title: str, visual_style
     return valid
 
 
+def _is_zero_key_mode(custom_api_key: str = "") -> bool:
+    """True when no keyed LLM provider is configured (free Pollinations path)."""
+    if (custom_api_key or "").strip():
+        return False
+    key_vars = ["ASTRA_API_KEY", "EXPERIENTIAL_API_KEY", "MUSE_API_KEY",
+                "META_API_KEY", "GROQ_API_KEY", "GOOGLE_AI_STUDIO_KEY",
+                "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY",
+                "OPENROUTER_API_KEY", "CEREBRAS_API_KEY", "HF_TOKEN", "HF_API_KEY"]
+    return not any((os.environ.get(v) or "").strip() for v in key_vars)
+
+
+def _generate_simple_pollinations_script(topic_title: str, context: str,
+                                          scene_count: int, target_length: int,
+                                          visual_style: str) -> dict | None:
+    """
+    Zero-key script generation via Pollinations text API.
+
+    The anonymous-tier model is a reasoning LLM that dumps its chain-of-thought
+    instead of answering long, heavily-constrained prompts. A compact prompt
+    asking for few fields returns clean JSON reliably (2026-09-27 loop-test).
+    Missing fields are repaired by _validate_and_repair_scenes / downstream
+    defaults. Retries with fresh seeds; returns the standard script dict or None.
+    """
+    facts = (context or "").strip()
+    if len(facts) > 900:
+        facts = facts[:900] + "..."
+    sys_p = ("You are a viral Shorts director. Output ONLY raw JSON, "
+             "no explanations, no reasoning, no markdown.")
+    user_p = (
+        f"Write a {scene_count}-scene vertical video script as JSON: "
+        '{"title": "...", "scenes": [{"scene_number": 1, "narration": "...", '
+        '"image_prompt": "..."}]}. '
+        f"Topic: {topic_title}. "
+        + (f"Facts to use: {facts} " if facts else "")
+        + "Rules: ONE topic only, no invented people, one continuous story across scenes. "
+        "Each narration is 8-12 words, one clear idea. "
+        "Each image_prompt names concrete physical things (objects, places, people doing actions), "
+        "cinematic 8k, dramatic lighting, 9:16 vertical, absolutely no text or words in the image. "
+        "Scene 1 is the title hook visual. Output ONLY the JSON."
+    )
+    for attempt in range(1, 6):
+        seed = random.randint(1, 999999999)
+        try:
+            resp = requests.post(
+                "https://text.pollinations.ai/?model=openai",
+                json={
+                    "messages": [
+                        {"role": "system", "content": sys_p},
+                        {"role": "user", "content": user_p},
+                    ],
+                    "jsonMode": True,
+                    "model": "openai",
+                    "seed": seed,
+                },
+                timeout=120,
+            )
+            if not (resp.ok and resp.text):
+                print(f"[script_gen] [simple] Attempt {attempt}: empty response; retrying...")
+                time.sleep(4)
+                continue
+            parsed = _parse_script_json(resp.text, topic_title)
+            scenes = _validate_and_repair_scenes(
+                (parsed or {}).get("scenes", []), topic_title, visual_style)
+            if parsed and len(scenes) >= 3:
+                full_script = parsed.get("script") or " ".join(
+                    s.get("narration", "") for s in scenes)
+                print(f"[script_gen] [simple] OK: {len(scenes)} scenes via Pollinations (attempt {attempt}).")
+                return {
+                    "title": parsed.get("title", topic_title),
+                    "script": full_script,
+                    "scenes": scenes,
+                    "overall_emotion": parsed.get("overall_emotion", "epic"),
+                    "description": parsed.get("description",
+                                              f"Deep-dive breakdown into {topic_title}."),
+                    "tags": parsed.get("tags", ["Shorts", "Viral", "Trending", "AI"]),
+                }
+            print(f"[script_gen] [simple] Attempt {attempt}: only {len(scenes)} usable scenes; retrying...")
+            time.sleep(4)
+        except Exception as e:
+            print(f"[script_gen] [simple] Attempt {attempt} note: {e}; retrying...")
+            time.sleep(4)
+    return None
+
+
 def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", custom_api_key="",
                            shorts_length=35, visual_style="cinema_8k",
                            article_url="", article_summary="", topic_context="",
@@ -569,6 +706,20 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
     # reference shot) and each scene's exact duration.
     clone_mode = bool(scene_count_override)
     scene_count_target = int(scene_count_override) if clone_mode else max(6, int(target_length / 4.5))
+
+    # ── Zero-key fast path ────────────────────────────────────────────────
+    # With no keyed provider, the chain would fall through to Pollinations'
+    # anonymous reasoning model, which dumps chain-of-thought instead of
+    # answering the rich director prompt. Use the compact prompt that it
+    # answers reliably (2026-09-27 loop-test).
+    if _is_zero_key_mode(custom_api_key) and not clone_mode:
+        simple = _generate_simple_pollinations_script(
+            topic_title, context, scene_count_target, target_length,
+            visual_style)
+        if simple:
+            return simple
+        print("[script_gen] Simple Pollinations path failed; trying full chain...")
+
     if clone_mode and scene_durations:
         target_length = int(round(sum(scene_durations)))
         word_count_min = max(20, int(target_length * 2.3))
@@ -638,28 +789,41 @@ def generate_video_content(topic_title, custom_prompt="", model_name="GPT-4o", c
     )
 
     # ── Phase 2: director script ────────────────────────────────────────────
-    content_str = _chat_via_chain(system_prompt, user_prompt, model_name, custom_api_key,
-                                  tag="script", max_new_tokens=3000)
-
-    # Parse and strictly validate
-    if content_str:
-        content_json = _parse_script_json(content_str, topic_title)
+    # Free text models are flaky (reasoning dumps, truncated JSON). Retry
+    # with a fresh seed a few times before failing the run (2026-09-27).
+    content_str = None
+    content_json = None
+    scenes = []
+    for attempt in range(1, 4):
+        content_str = _chat_via_chain(system_prompt, user_prompt, model_name, custom_api_key,
+                                      tag="script", max_new_tokens=3000)
+        if content_str:
+            content_json = _parse_script_json(content_str, topic_title)
         if content_json:
             raw_scenes = content_json.get("scenes", [])
             scenes = _validate_and_repair_scenes(raw_scenes, topic_title, visual_style)
             if len(scenes) >= 3:
-                full_script = content_json.get("script") or " ".join(s.get("narration", "") for s in scenes)
-                print(f"[script_gen] [SUCCESS] AI generated {len(scenes)} validated context-specific scenes for: '{topic_title}'!")
-                return {
-                    "title": content_json.get("title", topic_title),
-                    "script": full_script,
-                    "scenes": scenes,
-                    "overall_emotion": content_json.get("overall_emotion", "epic"),
-                    "description": content_json.get("description", f"Deep-dive breakdown into {topic_title}."),
-                    "tags": content_json.get("tags", ["Shorts", "Viral", "Trending", "AI"])
-                }
-            else:
-                print(f"[script_gen] Validation failed: only {len(scenes)} usable scenes (need >= 3).")
+                break
+            print(f"[script_gen] Attempt {attempt}: only {len(scenes)} usable scenes; retrying...")
+            content_json = None
+            scenes = []
+        elif attempt < 3:
+            print(f"[script_gen] Attempt {attempt}: unparseable script; retrying...")
+
+    # Parse and strictly validate
+    if content_json:
+        full_script = content_json.get("script") or " ".join(s.get("narration", "") for s in scenes)
+        print(f"[script_gen] [SUCCESS] AI generated {len(scenes)} validated context-specific scenes for: '{topic_title}'!")
+        return {
+            "title": content_json.get("title", topic_title),
+            "script": full_script,
+            "scenes": scenes,
+            "overall_emotion": content_json.get("overall_emotion", "epic"),
+            "description": content_json.get("description", f"Deep-dive breakdown into {topic_title}."),
+            "tags": content_json.get("tags", ["Shorts", "Viral", "Trending", "AI"])
+        }
+    else:
+        print(f"[script_gen] Validation failed: only {len(scenes)} usable scenes (need >= 3).")
 
     # FAIL-FAST: No generic hardcoded dummy templates!
     # If script generation is not done, DO NOT start the next process.

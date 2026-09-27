@@ -13,6 +13,7 @@ Features:
 import os
 import random
 import re
+import time
 import math
 import wave
 import struct
@@ -422,10 +423,13 @@ def prepare_video_shot(video_path, duration, width, height, fallback_image=None)
               f"{tail_dur:.2f}s drift tail (no loop).")
         return full
     except Exception as e:
-        # Last resort: return the short clip as-is (shot runs slightly short)
-        # rather than crash the render — never silently loop.
-        print(f"[video_assembler] Tail-drift note ({e}); keeping unlooped short clip.")
-        return clip
+        # Last resort: fall back to the scene image (exact duration) rather
+        # than returning a short clip. A short clip makes the concatenated
+        # content shorter than the audio, and with_duration() then pads the
+        # tail with BLACK frames ("video stops, blank screen with music").
+        # (2026-09-27 loop-test root cause of the 52s->30s+blank symptom.)
+        print(f"[video_assembler] Tail-drift note ({e}); using scene image (exact duration).")
+        return _image_fallback(f"Tail-drift failed for {video_path}")
 
 
 def add_custom_transitions(clips, scenes, width, height):
@@ -434,34 +438,41 @@ def add_custom_transitions(clips, scenes, width, height):
     - Speed ramp, Zoom burst in/out, Whip pan left/right, Glitch flash, RGB split, White flash, Dark pop, Cyber glow, Parallax slide.
     """
     from moviepy import ColorClip, concatenate_videoclips
+
+    def _flash_for(trans):
+        if trans in ['glitch_flash', 'glitch', 'rgb_split']:
+            return [ColorClip(size=(width, height), color=(255, 20, 80), duration=0.03),
+                    ColorClip(size=(width, height), color=(0, 240, 255), duration=0.03)]
+        if trans in ['whip_pan_left', 'whip_pan_right', 'whip_pan', 'whip']:
+            return [ColorClip(size=(width, height), color=(240, 248, 255), duration=0.05)]
+        if trans in ['zoom_burst_in', 'zoom_burst_out', 'speed_ramp', 'flash', 'white_flash']:
+            return [ColorClip(size=(width, height), color=(255, 255, 255), duration=0.05)]
+        if trans in ['motion_blur_push', 'dark_pop', 'dark_fade']:
+            return [ColorClip(size=(width, height), color=(10, 15, 26), duration=0.04)]
+        if trans in ['cyber_glow', 'color_pop']:
+            return [ColorClip(size=(width, height), color=(0, 255, 170), duration=0.04)]
+        if trans in ['parallax_slide', 'parallax']:
+            return [ColorClip(size=(width, height), color=(56, 189, 248), duration=0.04)]
+        return []
+
     new_clips = []
-    
     for i, c in enumerate(clips):
-        new_clips.append(c)
         if i < len(clips) - 1:
             scene = scenes[min(i, len(scenes)-1)] if scenes else {}
             trans = (scene.get('transition_type') or 'speed_ramp').lower().replace('-', '_')
-            
-            if trans in ['glitch_flash', 'glitch', 'rgb_split']:
-                glitch_c1 = ColorClip(size=(width, height), color=(255, 20, 80), duration=0.03)
-                glitch_c2 = ColorClip(size=(width, height), color=(0, 240, 255), duration=0.03)
-                new_clips.extend([glitch_c1, glitch_c2])
-            elif trans in ['whip_pan_left', 'whip_pan_right', 'whip_pan', 'whip']:
-                white_swipe = ColorClip(size=(width, height), color=(240, 248, 255), duration=0.05)
-                new_clips.append(white_swipe)
-            elif trans in ['zoom_burst_in', 'zoom_burst_out', 'speed_ramp', 'flash', 'white_flash']:
-                flash = ColorClip(size=(width, height), color=(255, 255, 255), duration=0.05)
-                new_clips.append(flash)
-            elif trans in ['motion_blur_push', 'dark_pop', 'dark_fade']:
-                dark_pop = ColorClip(size=(width, height), color=(10, 15, 26), duration=0.04)
-                new_clips.append(dark_pop)
-            elif trans in ['cyber_glow', 'color_pop']:
-                cyan_pop = ColorClip(size=(width, height), color=(0, 255, 170), duration=0.04)
-                new_clips.append(cyan_pop)
-            elif trans in ['parallax_slide', 'parallax']:
-                glow_pop = ColorClip(size=(width, height), color=(56, 189, 248), duration=0.04)
-                new_clips.append(glow_pop)
-                
+            flashes = _flash_for(trans)
+            flash_dur = sum(f.duration for f in flashes)
+            # Trim the flash duration off the END of the scene clip so the
+            # total stays exactly sum(scene spans). Inserted flashes used to
+            # push every later scene ~0.05s late vs the audio/captions.
+            # (2026-09-27 loop-test: caption/visual drift fix.)
+            if flash_dur > 0 and c.duration > flash_dur + 0.2:
+                c = c.subclipped(0, c.duration - flash_dur)
+            new_clips.append(c)
+            new_clips.extend(flashes)
+        else:
+            new_clips.append(c)
+
     return concatenate_videoclips(new_clips, method="compose")
 
 
@@ -897,6 +908,28 @@ def assemble_cinematic_video(
         raise RuntimeError("Video assembly failed: no clips were produced from any scene.")
 
     final_video = add_custom_transitions(video_clips, scenes, 1080, 1920)
+    # SAFETY (2026-09-27 loop-test): with_duration() on content SHORTER than
+    # total_duration pads the tail with BLACK frames (the "30s video + blank
+    # screen with music" symptom). If content runs short, extend the last
+    # frame as a freeze instead of ever emitting black.
+    try:
+        _content_dur = float(final_video.duration or 0)
+    except Exception:
+        _content_dur = 0.0
+    if _content_dur < total_duration - 0.05:
+        from moviepy import ImageClip, concatenate_videoclips as _concat
+        import numpy as _np
+        _gap = total_duration - _content_dur
+        try:
+            _last = final_video.get_frame(max(0.0, _content_dur - 0.04))
+            _freeze = ImageClip(_last).with_duration(_gap + 0.1)
+            final_video = _concat([final_video, _freeze],
+                                  method="compose").with_duration(total_duration)
+            print(f"[video_assembler] Content was {_content_dur:.2f}s < "
+                  f"audio {total_duration:.2f}s; froze last frame for "
+                  f"{_gap:.2f}s (no black tail).")
+        except Exception as _e:
+            print(f"[video_assembler] Freeze-pad note ({_e}); keeping content as-is.")
     final_video = final_video.with_duration(total_duration)
 
     # 3. Audio Mixing & Topic-Synced Background Music
@@ -1028,7 +1061,7 @@ def assemble_cinematic_video(
             video_id=output_filename,
             topic=topic_title,
             viral_score=viral_score,
-            transitions_used=learned_transitions,
+            transitions_used=[s.get("transition_type", "cut") for s in scenes],
             visual_style="Cinematic High-Retention"
         )
     except Exception as brain_err:

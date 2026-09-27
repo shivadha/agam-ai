@@ -194,6 +194,35 @@ def _fetch_topic_stock_image(prompt: str, width: int, height: int, output_path: 
     return False
 
 
+def _upscale_to_target(image_path: str, width: int, height: int) -> None:
+    """High-quality upscale of a downloaded image to the target resolution.
+
+    Free image APIs (Pollinations) return ~580x1015 regardless of the requested
+    size. A LANCZOS upscale + mild sharpen here gives every downstream stage
+    (motion engine, assembler) a clean 1080x1920 source instead of letting
+    moviepy's default resizer smear a small image (2026-09-27 loop-test).
+    Only upscales — never downscales an already-large image.
+    """
+    try:
+        from PIL import Image, ImageFilter
+        img = Image.open(image_path).convert("RGB")
+        if img.width >= width and img.height >= height:
+            return
+        # Preserve aspect: fit inside target, then center-crop to exact size.
+        scale = max(width / img.width, height / img.height)
+        nw, nh = int(img.width * scale + 0.5), int(img.height * scale + 0.5)
+        img = img.resize((nw, nh), Image.Resampling.LANCZOS)
+        left = (nw - width) // 2
+        top = (nh - height) // 2
+        img = img.crop((left, top, left + width, top + height))
+        img = img.filter(ImageFilter.UnsharpMask(radius=2.0, percent=60, threshold=2))
+        img.save(image_path, "JPEG", quality=93)
+        print(f"[image_gen] Upscaled to {width}x{height} (LANCZOS+sharpen): "
+              f"{os.path.basename(image_path)}")
+    except Exception as e:
+        print(f"[image_gen] Upscale note: {e}")
+
+
 def _create_placeholder_image(output_path: str, prompt: str, width: int, height: int, seed_val: int = 0):
     """Create a high-contrast dark cinematic title card with topic typography and glowing border."""
     from PIL import Image, ImageDraw, ImageFont
@@ -422,16 +451,25 @@ def _generate_image_once(
     }
 
     # Free models on Pollinations that do not require paid balance/pollen
+    # NOTE (2026-09-27 loop-test): the free tier caps output at ~576x1024 and
+    # preserves the REQUESTED aspect ratio — so request true 9:16 (the old
+    # 768x1024 request returned 3:4 images that lost content to center-crop).
+    # _upscale_to_target() then upscales cleanly to 1080x1920.
+    req_w, req_h = 576, 1024
+    if width and height:
+        req_h = 1024
+        req_w = max(320, int(req_h * width / height))
     for model_choice in ["turbo", "flux-realism", "flux-anime"]:
         pollinations_url = (
             f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-            f"?model={model_choice}&width={min(width, 768)}&height={min(height, 1024)}&nologo=true&seed={unique_seed}"
+            f"?model={model_choice}&width={req_w}&height={req_h}&nologo=true&seed={unique_seed}"
         )
         try:
             r = requests.get(pollinations_url, headers=poll_headers, timeout=40)
             if r.status_code == 200 and len(r.content) > 3000:
                 with open(output_path, 'wb') as f:
                     f.write(r.content)
+                _upscale_to_target(output_path, width, height)
                 print(f"[image_gen] OK: AI Image synthesized via free model '{model_choice}' saved to {output_path}")
                 return output_path
         except Exception as e:
