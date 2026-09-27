@@ -1,14 +1,14 @@
 {
   "version": "1.0",
-  "total_videos_learned": 5,
+  "total_videos_learned": 8,
   "transition_scores": {
-    "speed_ramp": 1.476,
-    "zoom_burst_in": 1.781,
+    "speed_ramp": 1.504,
+    "zoom_burst_in": 1.778,
     "zoom_burst_out": 1.281,
     "whip_pan_left": 1.426,
     "whip_pan_right": 1.352,
-    "motion_blur_push": 1.619,
-    "glitch_flash": 1.13,
+    "motion_blur_push": 1.585,
+    "glitch_flash": 1.095,
     "crossfade": 0.924
   },
   "pacing_target_wps": 2.6,
@@ -106,6 +106,60 @@
         "zoom_burst_out",
         "whip_pan_left",
         "crossfade"
+      ]
+    },
+    {
+      "timestamp": 1790404953,
+      "video_id": "video_n9.mp4",
+      "topic": "Google Joins OpenAI, Anthropic, Meta in Disclosing AI Hacks",
+      "viral_score": 36.0,
+      "visual_style": "Cinematic High-Retention",
+      "transitions_used": [
+        "glitch_flash",
+        "motion_blur_push",
+        "zoom_burst_in",
+        "parallax_slide",
+        "glitch_flash",
+        "speed_ramp",
+        "white_flash",
+        "zoom_burst_in",
+        "motion_blur_push"
+      ]
+    },
+    {
+      "timestamp": 1790406638,
+      "video_id": "video_n9.mp4",
+      "topic": "Big Bang Theory Spinoff Features Surprise Live-Action Cameos from The Flash and Mr. Freeze",
+      "viral_score": 10.0,
+      "visual_style": "Cinematic High-Retention",
+      "transitions_used": [
+        "whip_pan",
+        "motion_blur_push",
+        "glitch_flash",
+        "speed_ramp",
+        "parallax_slide",
+        "white_flash",
+        "parallax_slide",
+        "zoom_burst_in",
+        "motion_blur_push"
+      ]
+    },
+    {
+      "timestamp": 1790412573,
+      "video_id": "video_n9.mp4",
+      "topic": "AI Revolution in Open Source Models",
+      "viral_score": 98.0,
+      "visual_style": "Cinematic High-Retention",
+      "transitions_used": [
+        "zoom_burst_in",
+        "motion_blur_push",
+        "parallax_slide",
+        "glitch_flash",
+        "speed_ramp",
+        "parallax_slide",
+        "zoom_burst_in",
+        "motion_blur_push",
+        "speed_ramp"
       ]
     }
   ]

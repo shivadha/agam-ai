@@ -879,12 +879,15 @@ class WorkflowEngine:
                 from src.backend.audio_agent.brain import AudioBrain
                 brain = AudioBrain()
                 
-                viral_angle_data = self._find_in_state('viral_angle') or {}
-                if not viral_angle_data:
+                _va = self._find_in_state('viral_angle')
+                if isinstance(_va, dict):
+                    viral_angle_data = _va
+                else:
                     viral_angle_data = {
                         'emotion': self._find_in_state('emotion') or 'curiosity',
                         'hook_type': self._find_in_state('hook_type') or 'curiosity_gap',
-                        'viral_angle': self._find_in_state('viral_angle') or 'AI is changing everything'
+                        'category': self._find_in_state('category') or 'AI',
+                        'viral_angle': _va if isinstance(_va, str) and _va.strip() else 'AI is changing everything'
                     }
                 scenes = self._find_in_state('scenes') or []
                 

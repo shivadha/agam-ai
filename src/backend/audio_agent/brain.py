@@ -189,6 +189,11 @@ class AudioBrain:
         """
         self.reset_session()
         
+        if isinstance(viral_angle_data, str):
+            viral_angle_data = {"viral_angle": viral_angle_data, "emotion": "energetic"}
+        elif not isinstance(viral_angle_data, dict):
+            viral_angle_data = {}
+
         emotion = viral_angle_data.get("emotion", "energetic")
         energy_hint = self._emotion_to_energy(emotion)
         

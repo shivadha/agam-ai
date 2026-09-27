@@ -214,6 +214,7 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
     if not content_str and groq_key:
         print(f"[script_gen] [{tag}] Routing to Groq Fast Inference API...")
         groq_models = ["qwen/qwen3.8-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b"]
+        sys_prompt_groq = system_prompt if "json" in (system_prompt + " " + user_prompt).lower() else (system_prompt + "\n\nRespond with a valid JSON object.")
         for g_model in groq_models:
             try:
                 g_resp = requests.post(
@@ -222,7 +223,7 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
                     json={
                         "model": g_model,
                         "messages": [
-                            {"role": "system", "content": system_prompt},
+                            {"role": "system", "content": sys_prompt_groq},
                             {"role": "user", "content": user_prompt}
                         ],
                         "response_format": {"type": "json_object"},

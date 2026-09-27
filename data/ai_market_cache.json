@@ -9,8 +9,8 @@
       "endpoint": "https://image.pollinations.ai/prompt/{prompt}?model=flux&width={width}&height={height}&seed={seed}&nologo=true",
       "priority": 1,
       "status": "online",
-      "last_checked": 1790347006,
-      "latency_ms": 828
+      "last_checked": 1790481386,
+      "latency_ms": 1621
     },
     {
       "id": "pollinations_turbo",
@@ -21,8 +21,8 @@
       "endpoint": "https://image.pollinations.ai/prompt/{prompt}?model=turbo&width={width}&height={height}&seed={seed}&nologo=true",
       "priority": 2,
       "status": "online",
-      "last_checked": 1790347007,
-      "latency_ms": 973
+      "last_checked": 1790481387,
+      "latency_ms": 1186
     },
     {
       "id": "hf_flux_schnell",
@@ -34,7 +34,7 @@
       "endpoint": "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
       "priority": 3,
       "status": "offline",
-      "last_checked": 1790347007,
+      "last_checked": 1790481387,
       "latency_ms": 0
     },
     {
@@ -47,7 +47,7 @@
       "endpoint": "https://api-inference.huggingface.co/models/ByteDance/SDXL-Lightning",
       "priority": 4,
       "status": "offline",
-      "last_checked": 1790347007,
+      "last_checked": 1790481387,
       "latency_ms": 0
     }
   ],
@@ -60,7 +60,7 @@
       "auth_required": false,
       "priority": 1,
       "status": "online",
-      "last_checked": 1790347007,
+      "last_checked": 1790481387,
       "latency_ms": 5
     },
     {
@@ -73,9 +73,9 @@
       "endpoint": "https://api-inference.huggingface.co/models/stabilityai/stable-video-diffusion-img2vid-xt",
       "priority": 2,
       "status": "offline",
-      "last_checked": 1790347007,
+      "last_checked": 1790481387,
       "latency_ms": 0
     }
   ],
-  "last_scan_time": 1790347007
+  "last_scan_time": 1790481387
 }
