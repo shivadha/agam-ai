@@ -2535,73 +2535,68 @@ def api_ai_market_status():
 
 @app.route('/api/comfyui/status')
 def api_comfyui_status():
-    """Check if a local ComfyUI server is running for free AI image-to-video generation."""
-    import urllib.request, json as _json
-    comfyui_url = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188")
-    try:
-        req = urllib.request.Request(f"{comfyui_url}/system_stats",
-                                     headers={"User-Agent": "PulseForge/1.0"})
-        with urllib.request.urlopen(req, timeout=4) as r:
-            stats = _json.loads(r.read().decode())
-        
-        # Check available models
-        wan_models, ltx_models, svd_models = [], [], []
-        try:
-            req2 = urllib.request.Request(f"{comfyui_url}/models/checkpoints",
-                                          headers={"User-Agent": "PulseForge/1.0"})
-            with urllib.request.urlopen(req2, timeout=5) as r2:
-                models = _json.loads(r2.read().decode())
-            for m in (models if isinstance(models, list) else []):
-                ml = m.lower()
-                if "wan" in ml and ("i2v" in ml or "image" in ml):
-                    wan_models.append(m)
-                elif "ltx" in ml:
-                    ltx_models.append(m)
-                elif "svd" in ml:
-                    svd_models.append(m)
-        except Exception:
-            pass
-        
-        devices = stats.get("devices", [])
-        if devices and isinstance(devices, list) and len(devices) > 0:
-            dev = devices[0]
-            vram_gb = round(dev.get("vram_total", 0) / 1e9, 1)
-            vram_free_gb = round(dev.get("vram_free", 0) / 1e9, 1)
-        else:
-            sys_info = stats.get("system", {})
-            vram_gb = round(sys_info.get("vram_total", 0) / 1e9, 1)
-            vram_free_gb = round(sys_info.get("vram_free", 0) / 1e9, 1)
-        
-        active_model = wan_models[0] if wan_models else (ltx_models[0] if ltx_models else (svd_models[0] if svd_models else None))
-        i2v_ready = active_model is not None
-        status_msg = f"ComfyUI online! VRAM: {vram_free_gb}/{vram_gb}GB free. ({active_model} ✅)" if i2v_ready else f"ComfyUI online! VRAM: {vram_free_gb}/{vram_gb}GB free. No video model"
+    """Scan the local ComfyUI server and report the auto-picked i2v model.
 
-        return jsonify({
-            "status": "online",
-            "comfyui_url": comfyui_url,
-            "vram_total_gb": vram_gb,
-            "vram_free_gb": vram_free_gb,
-            "wan_models": wan_models,
-            "ltx_models": ltx_models,
-            "svd_models": svd_models,
-            "active_model": active_model,
-            "i2v_ready": i2v_ready,
-            "message": status_msg
-        })
+    Uses src/backend/comfyui_scan.py: checks checkpoints + diffusion_models,
+    ranks LTX > Wan > SVD by native clip length, and soft-checks VRAM fit.
+    ?refresh=1 bypasses the 120s cache.
+    """
+    from src.backend.comfyui_scan import scan_comfyui, COMFYUI_URL
+    refresh = (request.args.get("refresh") or "").lower() in ("1", "true", "yes")
+    try:
+        scan = scan_comfyui(COMFYUI_URL, refresh=refresh)
     except Exception as e:
         return jsonify({
             "status": "offline",
-            "comfyui_url": comfyui_url,
+            "comfyui_url": COMFYUI_URL,
             "message": "ComfyUI not running. Install: https://github.com/comfyanonymous/ComfyUI",
             "install_steps": [
                 "1. git clone https://github.com/comfyanonymous/ComfyUI",
                 "2. pip install -r requirements.txt",
                 "3. python main.py --listen",
-                "4. Download Wan model: huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P",
-                "5. Place in ComfyUI/models/checkpoints/",
-                "6. PulseForge will auto-detect and use it!"
+                "4. Download an i2v model (LTX-Video / Wan2.1-I2V / SVD-XT) from HuggingFace",
+                "5. Place it in ComfyUI/models/diffusion_models/ or models/checkpoints/",
+                "6. PulseForge auto-scans and picks the best one on every run!"
             ]
         })
+
+    if not scan["reachable"]:
+        return jsonify({
+            "status": "offline",
+            "comfyui_url": COMFYUI_URL,
+            "message": scan["reason"],
+        })
+
+    rec = scan.get("recommended") or {}
+    cands = scan.get("candidates") or []
+    wan_models = [c["name"] for c in cands if c["kind"] == "wan"]
+    ltx_models = [c["name"] for c in cands if c["kind"] == "ltx"]
+    svd_models = [c["name"] for c in cands if c["kind"] == "svd"]
+    active_model = rec.get("name")
+    i2v_ready = active_model is not None
+    vram_gb = scan.get("vram_total_gb") or 0
+    vram_free_gb = scan.get("vram_free_gb") or 0
+    status_msg = (f"ComfyUI online! VRAM: {vram_free_gb}/{vram_gb}GB free. "
+                  f"Auto-pick: {active_model} ✅" if i2v_ready
+                  else f"ComfyUI online! VRAM: {vram_free_gb}/{vram_gb}GB free. No video model")
+
+    return jsonify({
+        "status": "online",
+        "comfyui_url": COMFYUI_URL,
+        "vram_total_gb": vram_gb,
+        "vram_free_gb": vram_free_gb,
+        "wan_models": wan_models,
+        "ltx_models": ltx_models,
+        "svd_models": svd_models,
+        "active_model": active_model,
+        "i2v_ready": i2v_ready,
+        "message": status_msg,
+        # auto-scan detail (new)
+        "recommended": rec or None,
+        "reason": scan.get("reason"),
+        "candidates": cands,
+        "scanned_at": scan.get("scanned_at"),
+    })
 
 
 @app.route('/api/creative-brain/stats')

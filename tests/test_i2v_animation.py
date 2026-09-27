@@ -53,6 +53,49 @@ def test_prepare_video_shot_accepts_motion_prompt():
     assert "motion_prompt" in sig.parameters
 
 
+# ── ComfyUI model priority: LTX > Wan > SVD ──────────────────────────────
+# (user report 2026-09-27: "why we are not using LTX, I already have it" —
+# the old code checked SVD first, so LTX never ran on machines with both.)
+
+def test_pick_comfyui_model_prefers_ltx():
+    models = ["svd_xt_1_1.safetensors", "ltxv-13b-0.9.7-distilled.safetensors",
+              "wan2.1-i2v-14b-480p.safetensors"]
+    kind, name = vg._pick_comfyui_model(models)
+    assert kind == "ltx"
+    assert name == "ltxv-13b-0.9.7-distilled.safetensors"
+
+
+def test_pick_comfyui_model_wan_over_svd():
+    kind, name = vg._pick_comfyui_model(
+        ["svd.safetensors", "Wan2.1_I2V_1.3B_480p.safetensors"])
+    assert kind == "wan"
+
+
+def test_pick_comfyui_model_svd_only_and_none():
+    kind, _ = vg._pick_comfyui_model(["svd.safetensors"])
+    assert kind == "svd"
+    kind, name = vg._pick_comfyui_model(["v1-5-pruned-emaonly.safetensors"])
+    assert kind is None and name is None
+    kind, _ = vg._pick_comfyui_model([])
+    assert kind is None
+
+
+def test_ltx_frame_count_fills_duration():
+    # 9s shot -> 217 frames ≈ 9.0s @ 24fps (LTX native 8k+1 steps)
+    assert vg._ltx_frame_count(9.0) == 217
+    assert vg._ltx_frame_count(3.8) == 89
+    # capped at LTX maximum, floored at a useful minimum
+    assert vg._ltx_frame_count(30.0) == 257
+    assert vg._ltx_frame_count(0.5) == 25
+
+
+def test_ltx_workflow_uses_native_frame_count():
+    import inspect
+    src = inspect.getsource(vg._generate_comfyui_wan)
+    assert "_ltx_frame_count(duration)" in src
+    assert '"length": ltx_frames' in src
+
+
 def _natural_test_image(path, w=320, h=568):
     """Synthetic but natural-ish image: sky gradient + sun + dark ground."""
     import numpy as np

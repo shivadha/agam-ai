@@ -378,6 +378,18 @@ def test_video(provider: str = "", api_key: str = "") -> dict:
         try:
             r = requests.get("http://127.0.0.1:8188/system_stats", timeout=4)
             if r.status_code == 200:
+                # Report the auto-scan pick so the UI shows which model runs
+                # actually get (LTX > Wan > SVD by native clip length).
+                try:
+                    from src.backend.comfyui_scan import scan_comfyui
+                    scan = scan_comfyui()
+                    rec = (scan.get("recommended") or {}).get("name")
+                    if rec:
+                        return _ok("ComfyUI Local",
+                                   f"ComfyUI live on :8188 — auto-pick: {rec}.",
+                                   t0)
+                except Exception:
+                    pass
                 return _ok("ComfyUI Local", "ComfyUI video server live on :8188.", t0)
         except Exception:
             pass

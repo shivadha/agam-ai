@@ -171,7 +171,7 @@ const NODE_CONFIGS = {
         { key:'custom_text', label:'Custom Text',     type:'text', placeholder:'Leave blank to use hook/title', def:'' },
     ],
     'img-to-video': [
-        { key:'provider', label:'AI Video Provider', type:'select', opts:['ComfyUI (Local Wan 2.1 / LTX) [Free GPU]','MiniMax-H3 (HF Space) [Free, No Key]','HuggingFace SVD [Free Cloud]','MiniMax-H3 (Free/Cloud)','fal.ai','Kling','Luma','Runway'], def:'ComfyUI (Local Wan 2.1 / LTX) [Free GPU]' },
+        { key:'provider', label:'AI Video Provider', type:'select', opts:['ComfyUI (Auto-Scan Best Model) [Free GPU]','ComfyUI (LTX-Video) [Free GPU]','ComfyUI (Wan 2.1) [Free GPU]','ComfyUI (SVD) [Free GPU]','ComfyUI (Local Wan 2.1 / LTX) [Free GPU]','MiniMax-H3 (HF Space) [Free, No Key]','HuggingFace SVD [Free Cloud]','MiniMax-H3 (Free/Cloud)','fal.ai','Kling','Luma','Runway'], def:'ComfyUI (Auto-Scan Best Model) [Free GPU]' },
         { key:'api_key',  label:'API Key (Optional)', type:'text', placeholder:'Leave blank for local/free mode', def:'' },
         { key:'motion',   label:'Motion Scale',  type:'select', opts:['Low','Medium','High'], def:'Medium' },
         { key:'ratio',    label:'Aspect Ratio',  type:'select', opts:['9:16 (Shorts)','16:9 (YouTube)'], def:'9:16 (Shorts)' },
@@ -281,8 +281,8 @@ const FREE_MODE_PRESETS = {
     'gen-image':           { model: 'Pollinations FLUX [Free]' },
     'image-gen':           { model: 'Pollinations FLUX [Free]' },
     'visuals':             { model: 'Pollinations FLUX [Free]' },
-    'img-to-video':        { provider: 'ComfyUI (Local Wan 2.1 / LTX) [Free GPU]' },
-    'image-to-video':      { provider: 'ComfyUI (Local Wan 2.1 / LTX) [Free GPU]' },
+    'img-to-video':        { provider: 'ComfyUI (Auto-Scan Best Model) [Free GPU]' },
+    'image-to-video':      { provider: 'ComfyUI (Auto-Scan Best Model) [Free GPU]' },
 };
 
 function applyFreeModeToNode(node) {
@@ -1049,7 +1049,61 @@ function showPropsContent(nodeId) {
         el.addEventListener('input', onChange);
         el.addEventListener('change', onChange);
     });
+
+    // ComfyUI auto-scan box for img-to-video nodes
+    renderComfyScanBox(nodeId);
 }
+
+// ── ComfyUI local-model auto-scan box (img-to-video node properties) ──────
+// Shows which installed model every run will auto-pick (LTX > Wan > SVD by
+// native clip length, preferring a VRAM fit), with a manual re-scan button.
+// The provider dropdown above it can override the pick (Auto / LTX / Wan / SVD).
+async function renderComfyScanBox(nodeId) {
+    const node = APP.nodes.find(n => n.id === nodeId);
+    if (!node || (node.type !== 'img-to-video' && node.type !== 'image-to-video')) return;
+    const fieldsEl = document.getElementById(`pc-fields-${nodeId}`);
+    if (!fieldsEl || document.getElementById(`comfy-scan-${nodeId}`)) return;
+    const box = document.createElement('div');
+    box.id = `comfy-scan-${nodeId}`;
+    box.style.cssText = 'margin-top:10px;padding:10px 12px;background:rgba(56,189,248,0.05);border:1px solid rgba(56,189,248,0.28);border-radius:8px;';
+    box.innerHTML = `<div style="color:#7dd3fc;font-weight:700;font-size:0.76rem;margin-bottom:4px;">🔍 Local GPU model scan</div>
+        <div style="color:#94a3b8;font-size:0.72rem;">Scanning ComfyUI for the best video model…</div>`;
+    fieldsEl.appendChild(box);
+    refreshComfyScan(nodeId, false);
+}
+
+window.refreshComfyScan = async function(nodeId, forceRefresh) {
+    const box = document.getElementById(`comfy-scan-${nodeId}`);
+    if (!box) return;
+    const btnStyle = 'margin-top:8px;padding:5px 10px;background:rgba(56,189,248,0.12);border:1px solid rgba(56,189,248,0.4);border-radius:6px;color:#7dd3fc;font-size:0.72rem;font-weight:700;cursor:pointer;';
+    try {
+        const r = await fetch('/api/comfyui/status' + (forceRefresh ? '?refresh=1' : ''), { credentials: 'include' });
+        const d = await r.json();
+        if (d.status !== 'online') {
+            box.innerHTML = `<div style="color:#7dd3fc;font-weight:700;font-size:0.76rem;margin-bottom:4px;">🔍 Local GPU model scan</div>
+                <div style="color:#f87171;font-size:0.72rem;">❌ ${escHtml(d.message || 'ComfyUI offline — start it to use local AI video.')}</div>
+                <button style="${btnStyle}" onclick="refreshComfyScan('${nodeId}', true)">🔄 Re-scan</button>`;
+            return;
+        }
+        const rec = d.recommended || {};
+        const rows = (d.candidates || []).map(c => {
+            const star = (rec.name && rec.name === c.name) ? '⭐ ' : '<span style="opacity:0">⭐ </span>';
+            const fit = c.fits_vram === false ? '<span style="color:#fbbf24;">⚠ may exceed VRAM</span>'
+                      : (c.fits_vram ? '<span style="color:#00FFAA;">fits VRAM</span>' : '');
+            return `<div style="font-size:0.70rem;color:#cbd5e1;padding:2px 0;">${star}<span style="font-family:monospace;">${escHtml(c.name)}</span>
+                <span style="color:#94a3b8;">· ${c.kind.toUpperCase()} · ~${c.native_seconds}s native ${fit}</span></div>`;
+        }).join('') || '<div style="font-size:0.70rem;color:#94a3b8;">No LTX / Wan / SVD model found in checkpoints or diffusion_models.</div>';
+        box.innerHTML = `<div style="color:#7dd3fc;font-weight:700;font-size:0.76rem;margin-bottom:4px;">🔍 Local GPU model scan</div>
+            ${rec.name ? `<div style="font-size:0.74rem;color:#00FFAA;font-weight:700;margin-bottom:2px;">⭐ Auto-pick: ${escHtml(rec.name)}</div>
+            <div style="font-size:0.70rem;color:#94a3b8;margin-bottom:6px;">${escHtml(d.reason || '')}</div>` : ''}
+            ${rows}
+            <button style="${btnStyle}" onclick="refreshComfyScan('${nodeId}', true)">🔄 Re-scan</button>`;
+    } catch (e) {
+        box.innerHTML = `<div style="color:#7dd3fc;font-weight:700;font-size:0.76rem;margin-bottom:4px;">🔍 Local GPU model scan</div>
+            <div style="color:#f87171;font-size:0.72rem;">Scan failed: ${escHtml(e.message || e)}</div>
+            <button style="${btnStyle}" onclick="refreshComfyScan('${nodeId}', true)">🔄 Re-scan</button>`;
+    }
+};
 
 function renderPcField(f, node) {
     const val = node.config[f.key] !== undefined ? node.config[f.key] : f.def;
@@ -4193,8 +4247,8 @@ async function validateWorkflowRequirements() {
 
                 if (comfyOnline) {
                     videoNode.config = videoNode.config || {};
-                    videoNode.config.provider = 'ComfyUI (Local Wan / SVD - Free)';
-                    if (videoNode.data) videoNode.data.provider = 'ComfyUI (Local Wan / SVD - Free)';
+                    videoNode.config.provider = 'ComfyUI (Auto-Scan Best Model) [Free GPU]';
+                    if (videoNode.data) videoNode.data.provider = 'ComfyUI (Auto-Scan Best Model) [Free GPU]';
                     showToast('⚡ MiniMax key not set: Auto-routing to local GPU ComfyUI for 100% Free AI Video!', 'info', 4000);
                 } else {
                     return {

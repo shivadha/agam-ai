@@ -102,7 +102,13 @@ def generate_video_from_image(image_path: str, prompt: str, duration: float = 9.
         if p == "comfyui":
             print(f"[video_gen_ai] [ComfyUI] Generating genuine AI image-to-video via local ComfyUI at {comfyui_base}...")
             try:
-                res_path = _generate_comfyui_wan(image_path, prompt, duration, output_path, comfyui_base)
+                # provider string may carry a UI model override, e.g.
+                # "ComfyUI (LTX-Video) [Free GPU]" -> force='ltx'; the
+                # auto-scan provider -> force=None (scan picks the best).
+                force = _parse_comfyui_force(provider)
+                res_path = _generate_comfyui_wan(image_path, prompt, duration,
+                                                 output_path, comfyui_base,
+                                                 force=force)
                 if res_path and os.path.exists(res_path) and os.path.getsize(res_path) > 1000:
                     print(f"[video_gen_ai] [SUCCESS] ComfyUI local AI video generation succeeded: {res_path}")
                     return res_path
@@ -205,16 +211,55 @@ def _svd_frame_plan(svd_model: str) -> tuple:
     return frames, 7
 
 
+from src.backend.comfyui_scan import (
+    rank_i2v_models as _pick_comfyui_model,  # canonical LTX > Wan > SVD ranker
+    scan_comfyui,
+    classify_i2v,
+)
+
+
+def _ltx_frame_count(duration: float) -> int:
+    """LTX-Video frame count that fills the requested duration at 24fps.
+
+    LTX natively supports 9..257 frames in steps of 8k+1. A 9s shot gets
+    217 frames (~9.0s) — almost no synthetic tail needed.
+    """
+    return min(257, max(25, (int(float(duration or 9.0) * 24) // 8) * 8 + 1))
+
+
+def _parse_comfyui_force(provider: str):
+    """Parse a manual model override out of the provider string.
+
+    Returns 'ltx' | 'wan' | 'svd' | exact checkpoint filename | None (auto).
+    The plain "auto-scan" provider (or the legacy "Local Wan 2.1 / LTX" one,
+    which named two models) means auto — scan and pick the best.
+    """
+    prov = (provider or "").lower()
+    if "comfy" not in prov and "local" not in prov:
+        return None
+    if "auto" in prov or ("wan" in prov and "ltx" in prov):
+        return None
+    if ":ltx" in prov or "(ltx" in prov or "ltx-video" in prov:
+        return "ltx"
+    if ":wan" in prov or "(wan" in prov:
+        return "wan"
+    if ":svd" in prov or "(svd" in prov:
+        return "svd"
+    return None
+
+
 def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
-                          output_path: str, base_url: str = "http://127.0.0.1:8188") -> str:
+                          output_path: str, base_url: str = "http://127.0.0.1:8188",
+                          force: str = None) -> str:
     """
     Generate real AI image-to-video using a locally running ComfyUI server.
-    
-    Workflow priority:
-    1. Wan 1.3B Image-to-Video (fast, 8GB VRAM)
-    2. LTX-Video Image-to-Video (high quality, 12GB+ VRAM)
-    3. AnimateDiff + ControlNet (works on 6GB VRAM)
-    
+
+    Model selection: every call scans the local ComfyUI server
+    (checkpoints + diffusion_models) and auto-picks the installed model with
+    the longest native clip — LTX-Video (~10s) > Wan (~5s) > SVD (~3.6s) —
+    preferring one that fits VRAM. Pass force='ltx'/'wan'/'svd' (or an exact
+    checkpoint filename) to override the auto-pick from the UI.
+
     Falls back gracefully if ComfyUI is not running.
     """
     import urllib.request
@@ -274,30 +319,53 @@ def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
         uploaded_name = img_fname
 
     # ── 4. Build the ComfyUI workflow ──
-    # We'll try Wan 1.3B I2V first (lightest, most compatible)
+    # Model priority: LTX-Video first (longest native clips), then Wan, then SVD
     client_id = str(uuid.uuid4())
     num_frames = max(16, min(81, int(duration * 16)))  # Wan supports up to 81 frames
     
-    # Detect which models are available from ComfyUI's model list
-    wan_model = None
-    ltx_model = None
-    svd_model = None
-    try:
-        req = urllib.request.Request(f"{base_url}/models/checkpoints", headers={"User-Agent": "PulseForge/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            models = json.loads(r.read().decode())
-        for m in (models if isinstance(models, list) else []):
-            ml = m.lower()
-            if "wan" in ml and ("i2v" in ml or "image" in ml):
-                wan_model = m
-                break
-            elif "ltx" in ml:
-                ltx_model = m
-            elif "svd" in ml:
-                svd_model = m
-        print(f"[ComfyUI] Detected models — Wan: {wan_model}, LTX: {ltx_model}, SVD: {svd_model}")
-    except Exception:
-        pass
+    # Detect which models are available from ComfyUI's model list.
+    # Auto-scan: checkpoints + diffusion_models, ranked LTX > Wan > SVD,
+    # preferring a VRAM fit. `force` overrides the auto-pick from the UI.
+    wan_model = ltx_model = svd_model = None
+    scan = scan_comfyui(base_url)
+    if scan["reachable"]:
+        print(f"[ComfyUI] Auto-scan: {scan['reason']}")
+    if force:
+        fl = force.lower()
+        if fl in ("ltx", "wan", "svd"):
+            for c in scan["candidates"]:
+                if c["kind"] == fl:
+                    if fl == "ltx":
+                        ltx_model = c["name"]
+                    elif fl == "wan":
+                        wan_model = c["name"]
+                    else:
+                        svd_model = c["name"]
+                    break
+            print(f"[ComfyUI] UI override: forcing {fl} "
+                  f"({ltx_model or wan_model or svd_model or 'not installed!'})")
+        else:
+            # exact checkpoint filename
+            for c in scan["candidates"]:
+                if c["name"] == force or c["name"].lower() == fl:
+                    if c["kind"] == "ltx":
+                        ltx_model = c["name"]
+                    elif c["kind"] == "wan":
+                        wan_model = c["name"]
+                    else:
+                        svd_model = c["name"]
+                    break
+            print(f"[ComfyUI] UI override: forcing checkpoint '{force}'")
+    else:
+        rec = scan.get("recommended") or {}
+        rkind, rname = rec.get("kind"), rec.get("name")
+        if rkind == "ltx":
+            ltx_model = rname
+        elif rkind == "wan":
+            wan_model = rname
+        elif rkind == "svd":
+            svd_model = rname
+        print(f"[ComfyUI] Detected models — picked: {rkind} ({rname})")
 
     # ── Choose optimal workflow based on detected models ──
     if svd_model:
@@ -379,6 +447,9 @@ def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
         }
         print(f"[ComfyUI] Using Wan I2V model: {wan_model} ({num_frames} frames)")
     elif ltx_model:
+        # LTX-Video natively renders long clips: fill the whole shot at 24fps
+        # (9s -> 217 frames ≈ 9.0s) so almost no synthetic tail is needed.
+        ltx_frames = _ltx_frame_count(duration)
         workflow = {
             "1": {"class_type": "LoadImage", "inputs": {"image": uploaded_name}},
             "2": {"class_type": "LTXVImageToVideo", "inputs": {
@@ -387,7 +458,7 @@ def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
                 "negative": "blur, static, low quality, artifacts",
                 "image": ["1", 0],
                 "width": 768, "height": 512,
-                "length": num_frames,
+                "length": ltx_frames,
                 "steps": 25, "cfg": 3.5,
                 "seed": int(time.time()) % 2147483647
             }},
@@ -398,7 +469,7 @@ def _generate_comfyui_wan(image_path: str, prompt: str, duration: float,
                 "format": "video/mp4"
             }}
         }
-        print(f"[ComfyUI] Using LTX-Video model: {ltx_model}")
+        print(f"[ComfyUI] Using LTX-Video model: {ltx_model} ({ltx_frames} frames @ 24fps)")
     else:
         workflow = {
             "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1-5-pruned-emaonly.safetensors"}},
