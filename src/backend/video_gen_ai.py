@@ -11,16 +11,16 @@ from PIL import Image, ImageFilter, ImageEnhance
 
 # Minimum length (seconds) of every image-to-video clip the pipeline
 # renders. Scene timings shorter than this are extended so no video
-# ever comes out as a stubby 3-4s loop.
-MIN_SHOT_SECONDS = 10.0
+# ever comes out as a stubby 3-4s loop. (User request 2026-09-27: 7s.)
+MIN_SHOT_SECONDS = 7.0
 
-def generate_video_from_image(image_path: str, prompt: str, duration: float = 10.0, provider: str = "Luma", api_key: str = "", output_dir: str = "C:\\AI_project\\output", enforce_min: bool = True) -> str:
+def generate_video_from_image(image_path: str, prompt: str, duration: float = 7.0, provider: str = "Luma", api_key: str = "", output_dir: str = "C:\\AI_project\\output", enforce_min: bool = True) -> str:
     """
     Triggers AI Image-to-Video generation. 
     Implements a self-healing fallback queue:
     1. Tries cloud AI models (HuggingFace SVD, Pollinations, Luma, Runway, Kling, fal.ai) if credentials exist.
     2. Guarantees 100% success by falling back to the built-in Procedural Neural Motion Engine
-       which synthesizes 10+ dynamic camera physics effects directly matching the prompt.
+       which synthesizes 7s dynamic camera physics effects directly matching the prompt.
 
     Every generated clip is at least MIN_SHOT_SECONDS long — short
     scene timings never produce stubby 3-4s videos. Clone mode

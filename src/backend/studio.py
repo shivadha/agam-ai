@@ -60,13 +60,73 @@ def safe_filename(name: str, max_len: int = 80) -> str:
     return (name[:max_len] or "video").strip()
 
 
+def _remux_to_mp4(src_path: str) -> str:
+    """Remux a non-mp4 download (e.g. webm) into an mp4 container.
+
+    yt-dlp's --merge-output-format only applies when it actually merges
+    streams; a single-file download keeps its native extension, which is
+    what produced the old "finished but no mp4 file was produced" error.
+    Stream-copy first (fast, lossless); fall back to a light re-encode.
+    Returns the mp4 path on success, else the original path.
+    """
+    if src_path.lower().endswith(".mp4"):
+        return src_path
+    dst_path = os.path.splitext(src_path)[0] + ".mp4"
+    ffmpeg = _ffmpeg_exe()
+    for extra in (["-c", "copy"], ["-c:v", "libx264", "-preset", "veryfast",
+                                   "-crf", "21", "-c:a", "aac"]):
+        try:
+            proc = subprocess.run(
+                [ffmpeg, "-y", "-i", src_path] + extra + [dst_path],
+                capture_output=True, text=True, timeout=900)
+            if proc.returncode == 0 and os.path.exists(dst_path) \
+                    and os.path.getsize(dst_path) > 500:
+                try:
+                    os.remove(src_path)
+                except OSError:
+                    pass
+                return dst_path
+        except Exception:
+            pass
+    return src_path
+
+
+def _newest_media_file(out_dir: str, exts=(".mp4", ".webm", ".mkv", ".mov")) -> str | None:
+    """Newest media file in a directory (fallback when yt-dlp's reported
+    path can't be used)."""
+    best = None
+    try:
+        for fname in os.listdir(out_dir):
+            if fname.lower().endswith(exts):
+                fpath = os.path.join(out_dir, fname)
+                try:
+                    mtime = os.path.getmtime(fpath)
+                except OSError:
+                    continue
+                if best is None or mtime > best[0]:
+                    best = (mtime, fpath)
+    except OSError:
+        pass
+    return best[1] if best else None
+
+
 def download_youtube(url: str, out_dir: str = STUDIO_DIR) -> dict:
-    """Download best mp4 <=720p via yt-dlp. Returns {file, title, video_id, duration_sec}."""
+    """Download best <=720p via yt-dlp. Returns {file, title, video_id, duration_sec}.
+
+    Robust file resolution: the final on-disk path is captured with
+    ``--print after_move:filepath`` so we never depend on extension
+    guessing or filename globs. If yt-dlp produced a non-mp4 container
+    (e.g. webm — a single-file download keeps its native extension even
+    with --merge-output-format mp4), it is remuxed to mp4 with ffmpeg.
+    """
     ok, msg = ensure_yt_dlp()
     if not ok:
         raise RuntimeError(f"yt-dlp unavailable: {msg}")
     os.makedirs(out_dir, exist_ok=True)
     out_tmpl = os.path.join(out_dir, "%(title).60s [%(id)s].%(ext)s")
+    # Marker-delimited prints: one line carries the FINAL filepath (after
+    # any merge/move), the other carries title/duration/id. after_move
+    # prints only once the file is fully written.
     cmd = [
         sys.executable, "-m", "yt_dlp",
         "--no-playlist",
@@ -74,38 +134,36 @@ def download_youtube(url: str, out_dir: str = STUDIO_DIR) -> dict:
         "--merge-output-format", "mp4",
         "--no-warnings",
         "-o", out_tmpl,
-        "--print", "%(title)s\t%(duration)s\t%(id)s",
+        "--print", "after_move:STUDIOFILE\t%(filepath)s",
+        "--print", "after_move:STUDIOMETA\t%(title)s\t%(duration)s\t%(id)s",
         url,
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
     if proc.returncode != 0:
         raise RuntimeError(f"yt-dlp failed: {(proc.stderr or proc.stdout or '')[-500:]}")
-    # Last non-empty stdout line carries title/duration/id.
-    meta_line = ""
-    for line in reversed((proc.stdout or "").splitlines()):
-        if line.strip():
-            meta_line = line.strip()
-            break
+    # Parse the marker lines (last occurrence wins).
+    fpath = None
     title, duration_s, video_id = "YouTube video", "0", ""
-    parts = meta_line.split("\t")
-    if len(parts) >= 3:
-        title, duration_s, video_id = parts[0], parts[1], parts[2]
-    # Find the downloaded file: newest mp4 in out_dir matching the video id.
-    candidates = []
-    for fname in os.listdir(out_dir):
-        if fname.lower().endswith(".mp4"):
-            fpath = os.path.join(out_dir, fname)
-            if video_id and video_id in fname:
-                candidates.append((os.path.getmtime(fpath), fpath))
-    if not candidates:
-        for fname in os.listdir(out_dir):
-            if fname.lower().endswith(".mp4"):
-                fpath = os.path.join(out_dir, fname)
-                candidates.append((os.path.getmtime(fpath), fpath))
-    if not candidates:
-        raise RuntimeError("yt-dlp finished but no mp4 file was produced")
-    candidates.sort(reverse=True)
-    fpath = candidates[0][1]
+    for line in (proc.stdout or "").splitlines():
+        if line.startswith("STUDIOFILE\t"):
+            cand = line.split("\t", 1)[1].strip()
+            if cand:
+                fpath = cand
+        elif line.startswith("STUDIOMETA\t"):
+            parts = line.split("\t")
+            if len(parts) >= 4:
+                title, duration_s, video_id = parts[1], parts[2], parts[3]
+    # Fallbacks: the exact path missing (old yt-dlp without after_move
+    # support) -> newest media file in the job dir.
+    if not fpath or not os.path.exists(fpath):
+        fpath = _newest_media_file(out_dir)
+    if not fpath or not os.path.exists(fpath):
+        raise RuntimeError(
+            "yt-dlp finished but no video file was produced "
+            f"(stdout tail: {((proc.stdout or '')[-200:]).strip()!r})")
+    # Normalize to mp4 so every downstream step (clipper, DB, UI) can
+    # rely on the container.
+    fpath = _remux_to_mp4(fpath)
     try:
         duration = float(duration_s) if duration_s not in ("NA", "None", "") else 0.0
     except (TypeError, ValueError):
@@ -279,6 +337,117 @@ def resolve_sound_path(sound_id: int) -> dict:
     if not lp or not os.path.exists(lp):
         raise RuntimeError("sound file is not available locally")
     return {"path": os.path.abspath(lp), "name": row["name"]}
+
+
+def list_music_tracks(per_page: int = 60) -> list:
+    """Music tracks for the Clip Studio music card, backed by the real
+    sound library (not hardcoded).
+
+    Returns library music sounds — downloaded ones first — each as
+    {id, name, duration_sec, has_local_file, play_url, source, emotion,
+    viral_score}. play_url streams the local file when downloaded, else
+    the remote source_url so tracks can be previewed before download.
+    Mixing a non-downloaded track fetches it on demand (see
+    resolve_sound_path). Never raises; returns [] on failure.
+
+    Kicks off a background library sync when the collection is thin so
+    the card keeps filling itself with free viral tracks.
+    """
+    try:
+        from src.backend.audio_agent.sync import ensure_fresh
+        try:
+            ensure_fresh("music", min_downloaded=5, max_downloads=40)
+        except Exception:
+            pass
+        from src.backend.audio_agent.library import AudioLibrary
+        lib = AudioLibrary()
+        data = lib.browse(category="music", downloaded_only=False,
+                          per_page=max(1, min(per_page, 200)))
+        tracks = []
+        for s in data.get("sounds", []):
+            lp = s.get("local_path") or ""
+            has_file = bool(lp) and os.path.exists(lp)
+            play_url = None
+            if has_file:
+                # Same URL scheme as /api/audio-library enrichment.
+                fname = os.path.basename(lp)
+                play_url = f"/api/audio/file/{fname}"
+            elif s.get("source_url"):
+                play_url = s.get("source_url")
+            tracks.append({
+                "id": s.get("id"),
+                "name": s.get("name") or f"Track {s.get('id')}",
+                "duration_sec": s.get("duration_sec"),
+                "has_local_file": has_file,
+                "play_url": play_url,
+                "source": s.get("source"),
+                "emotion": s.get("emotion"),
+                "energy_level": s.get("energy_level"),
+                "viral_score": s.get("viral_score"),
+            })
+        # Downloaded first, then by viral score.
+        tracks.sort(key=lambda t: (not t["has_local_file"],
+                                   -(t["viral_score"] or 0)))
+        return tracks
+    except Exception as e:
+        print(f"[studio] list_music_tracks note: {e}")
+        return []
+
+
+VIRAL_MUSIC_QUERIES = ["viral", "trending", "phonk", "upbeat", "cinematic",
+                       "lofi hip hop", "energetic", "epic trailer"]
+
+
+def fetch_viral_music(max_downloads: int = 25) -> dict:
+    """Download more FREE viral background tracks into the sound library.
+
+    Sources (all free, no API keys): the curated music catalog, Pixabay
+    music searches, and the trending scout's music finds. Best-effort and
+    never raises — returns a stats dict.
+    """
+    stats = {"curated": {"downloaded": 0, "failed": 0},
+             "pixabay_music": {"downloaded": 0, "failed": 0},
+             "total_downloaded": 0}
+    try:
+        from src.backend.audio_agent.library import AudioLibrary
+        from src.backend.audio_agent.scraper import AudioScraper
+        from src.backend.audio_agent import sound_scout
+        lib = AudioLibrary()
+        scraper = AudioScraper(library=lib)
+        try:
+            stats["curated"] = scraper._sync_curated_music()
+        except Exception as e:
+            stats["curated"] = {"downloaded": 0, "failed": 0, "error": str(e)}
+        downloaded = int(stats["curated"].get("downloaded", 0) or 0)
+        pix_dl = pix_fail = 0
+        for q in VIRAL_MUSIC_QUERIES:
+            if downloaded >= max_downloads:
+                break
+            try:
+                recs = sound_scout.scrape_pixabay_music(q, limit=6)
+            except Exception:
+                continue
+            for rec in recs:
+                if downloaded >= max_downloads:
+                    break
+                try:
+                    outcome = scraper._index_record(rec)
+                except Exception:
+                    outcome = "failed"
+                if outcome == "downloaded":
+                    downloaded += 1
+                    pix_dl += 1
+                elif outcome == "failed":
+                    pix_fail += 1
+        stats["pixabay_music"] = {"downloaded": pix_dl, "failed": pix_fail}
+        stats["total_downloaded"] = downloaded
+        try:
+            lib.log("studio_fetch_viral_music", f"downloaded={downloaded}")
+        except Exception:
+            pass
+    except Exception as e:
+        stats["error"] = str(e)
+    return stats
 
 
 def build_music_mix_cmd(video_path: str, music_path: str, out_path: str,

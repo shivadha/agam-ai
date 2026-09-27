@@ -1106,6 +1106,52 @@ def api_studio_music_status(job_id):
     return jsonify({"status": "success", "job": job})
 
 
+@app.route('/api/studio/music', methods=['GET'])
+@login_required
+def api_studio_music():
+    """Music tracks for the Clip Studio card — backed by the real sound
+    library (auto-syncs in the background when thin)."""
+    from src.backend import studio
+    tracks = studio.list_music_tracks(
+        per_page=request.args.get('per_page', 60, type=int))
+    return jsonify({"status": "success", "tracks": tracks,
+                    "total": len(tracks)})
+
+
+@app.route('/api/studio/music/fetch-more', methods=['POST'])
+@login_required
+def api_studio_music_fetch_more():
+    """Download more free viral background tracks (background job)."""
+    from src.backend import studio
+    data = request.get_json() or {}
+    try:
+        max_dl = max(1, min(60, int(data.get('max_downloads', 25))))
+    except (TypeError, ValueError):
+        max_dl = 25
+    job_id = _studio_job_start("studio-music-fetch")
+
+    def _run():
+        try:
+            stats = studio.fetch_viral_music(max_downloads=max_dl)
+            tracks = studio.list_music_tracks()
+            _studio_job_set(job_id, "done", result={
+                "stats": stats, "track_count": len(tracks)})
+        except Exception as e:
+            _studio_job_set(job_id, "error", error=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "queued", "job_id": job_id})
+
+
+@app.route('/api/studio/music/fetch-status/<job_id>')
+@login_required
+def api_studio_music_fetch_status(job_id):
+    job = _studio_job_get(job_id)
+    if not job:
+        return jsonify({"status": "error", "message": "Unknown job id."}), 404
+    return jsonify({"status": "success", "job": job})
+
+
 # ── Style Lab: analyze a viral short, save/reuse its editing style ──────────
 def _studio_style_profile(style_id):
     """Load a saved style row as a make_clip-ready profile dict (or None)."""
