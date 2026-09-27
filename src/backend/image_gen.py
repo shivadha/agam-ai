@@ -121,21 +121,34 @@ def _extract_subject_queries(prompt: str, topic: str = "") -> list:
     return queries
 
 
+def _title_vocab(title: str) -> set:
+    """Tokenize a file title into whole lowercase words for matching."""
+    return set(re.findall(r"[a-z0-9]+", (title or "").lower()))
+
+
 def _fetch_topic_stock_image(prompt: str, width: int, height: int, output_path: str,
                              topic: str = "") -> bool:
     """
     Searches for high-resolution free stock images matching the SUBJECT.
     Every candidate result is validated: the file title must contain at least
-    one subject token, otherwise it is rejected (no more sky photos for a
-    Batman video). Returns False instead of a wrong image.
+    one subject token as a WHOLE WORD, otherwise it is rejected (no more sky
+    photos for a Batman video). Returns False instead of a wrong image.
     """
     queries = _extract_subject_queries(prompt, topic)
     headers = {'User-Agent': 'PulseForge/2.0 (MediaBot; admin@pulseforge.local)'}
 
+    best = None  # (score, title, url) — highest whole-word token overlap wins
     for query in queries:
-        tokens = {t for t in query.lower().split() if len(t) > 2}
+        qwords = re.findall(r"[a-z0-9]+", query.lower())
+        # A lone short token ("now", "ice", "bat") matches inside unrelated
+        # words ("NOW ON", "meeting", "combat") — never search one alone.
+        if len(qwords) == 1 and len(qwords[0]) < 4:
+            continue
+        matchable = {t for t in qwords if len(t) >= 4}
+        if not matchable:
+            continue
         # Never search a lone scenery word ("sky") — it can only return junk.
-        if len(tokens) == 1 and next(iter(tokens)) in _GENERIC_SCENERY:
+        if len(matchable) == 1 and next(iter(matchable)) in _GENERIC_SCENERY:
             continue
         try:
             api_url = ("https://commons.wikimedia.org/w/api.php?action=query"
@@ -147,25 +160,36 @@ def _fetch_topic_stock_image(prompt: str, width: int, height: int, output_path: 
 
             pages = data.get("query", {}).get("pages", {})
             for page_id, page_data in pages.items():
-                title = (page_data.get("title") or "").lower()
-                # Validate: the file must actually be about the subject.
-                if tokens and not any(t in title for t in tokens):
+                title = page_data.get("title") or ""
+                # Validate on WHOLE WORDS: substring matching let "now" match
+                # "NOW ON" and "ice" match "meeting"/"police".
+                hits = matchable & _title_vocab(title)
+                if not hits:
                     continue
                 img_info = page_data.get("imageinfo", [{}])[0]
                 url = img_info.get("url")
                 if url:
                     clean_url = url.split("?")[0].lower()
                     if any(clean_url.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
-                        dl_req = urllib.request.Request(url, headers=headers)
-                        with urllib.request.urlopen(dl_req, timeout=15) as dl_resp:
-                            content = dl_resp.read()
-                            if len(content) > 10000:
-                                with open(output_path, "wb") as f:
-                                    f.write(content)
-                                print(f"[image_gen] [Stock Match] '{query}' -> '{page_data.get('title','')[:60]}' ({len(content)//1024} KB)")
-                                return True
+                        score = len(hits)
+                        if best is None or score > best[0]:
+                            best = (score, title, url)
         except Exception as e:
             print(f"[image_gen] Topic stock search for '{query}' note: {e}")
+
+    if best:
+        _score, title, url = best
+        try:
+            dl_req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(dl_req, timeout=15) as dl_resp:
+                content = dl_resp.read()
+                if len(content) > 10000:
+                    with open(output_path, "wb") as f:
+                        f.write(content)
+                    print(f"[image_gen] [Stock Match] '{title[:60]}' ({len(content)//1024} KB)")
+                    return True
+        except Exception as e:
+            print(f"[image_gen] Stock download note: {e}")
 
     return False
 

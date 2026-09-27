@@ -72,12 +72,17 @@ def _esc_ass(text):
 
 
 def _write_ass_karaoke(window_words, ass_path, offset=0.0,
-                       highlight="yellow", max_words_per_line=_MAX_WORDS_PER_LINE):
+                       highlight="yellow", max_words_per_line=_MAX_WORDS_PER_LINE,
+                       font_size=_FONT_SIZE, alignment=2, margin_v=_MARGIN_V):
     """Write an ASS file: full phrase shown, only the spoken word highlighted.
 
     One Dialogue event per word, spanning that word's time slot; the current
     word is wrapped in a colour override. This is the Hormozi/viral look and
     needs no karaoke-sweep ambiguity.
+
+    font_size / alignment / margin_v let a Style Lab profile override caption
+    placement (e.g. top-zone captions on the reference short). Defaults keep
+    the classic bottom-zone look.
     """
     hl = HIGHLIGHTS.get(highlight, HIGHLIGHTS["yellow"])
     header = (
@@ -93,8 +98,8 @@ def _write_ass_karaoke(window_words, ass_path, offset=0.0,
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Clip,Arial,{_FONT_SIZE},{WHITE},{WHITE},"
-        f"{BLACK_OUTLINE},&H00000000,-1,0,0,0,100,100,0,0,1,3,0,2,60,60,{_MARGIN_V},1\n"
+        f"Style: Clip,Arial,{font_size},{WHITE},{WHITE},"
+        f"{BLACK_OUTLINE},&H00000000,-1,0,0,0,100,100,0,0,1,3,0,{alignment},60,60,{margin_v},1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
@@ -133,7 +138,9 @@ def _write_ass_karaoke(window_words, ass_path, offset=0.0,
     return ass_path
 
 
-def _write_srt_classic(window_words, ass_path, offset=0.0):
+def _write_srt_classic(window_words, ass_path, offset=0.0,
+                       max_words_per_line=_MAX_WORDS_PER_LINE,
+                       font_size=_FONT_SIZE, alignment=2, margin_v=_MARGIN_V):
     """Classic whole-phrase captions as ASS (same style, no word highlight)."""
     header = (
         "[Script Info]\n"
@@ -148,8 +155,8 @@ def _write_srt_classic(window_words, ass_path, offset=0.0):
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Clip,Arial,{_FONT_SIZE},{WHITE},{WHITE},"
-        f"{BLACK_OUTLINE},&H00000000,-1,0,0,0,100,100,0,0,1,3,0,2,60,60,{_MARGIN_V},1\n"
+        f"Style: Clip,Arial,{font_size},{WHITE},{WHITE},"
+        f"{BLACK_OUTLINE},&H00000000,-1,0,0,0,100,100,0,0,1,3,0,{alignment},60,60,{margin_v},1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
@@ -159,7 +166,7 @@ def _write_srt_classic(window_words, ass_path, offset=0.0):
     chunk = []
     for w in window_words:
         chunk.append(w)
-        if len(chunk) >= _MAX_WORDS_PER_LINE:
+        if len(chunk) >= max_words_per_line:
             start = chunk[0]["start"] - offset
             end = chunk[-1]["end"] - offset + 0.12
             text = _esc_ass(" ".join(x["word"] for x in chunk))
@@ -251,12 +258,137 @@ def _escape_ass_path(path):
 # Public API
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Style Lab: apply a learned viral-short style profile to a clip
+# ---------------------------------------------------------------------------
+
+# At/above this cut cadence, reference shorts feel "punchy" -- reproduce that
+# with zoom punch-ins on the reference's average shot rhythm.
+_PUNCH_CUTS_PER_MIN = 12.0
+
+# ASS alignment codes for caption zones: 8 = top-center, 5 = middle-center,
+# 2 = bottom-center.
+_ZONE_ALIGN = {"top": 8, "middle": 5, "bottom": 2}
+
+
+def style_caption_params(style_profile):
+    """Map a style profile's caption analysis onto ASS style params.
+
+    Returns {font_size, alignment, margin_v, max_words_per_line}.
+    With no profile (or no caption data) this returns the classic
+    bottom-zone karaoke look -- i.e. current behavior.
+    """
+    params = {"font_size": _FONT_SIZE, "alignment": 2, "margin_v": _MARGIN_V,
+              "max_words_per_line": _MAX_WORDS_PER_LINE}
+    if not isinstance(style_profile, dict):
+        return params
+    cap = style_profile.get("captions") or {}
+    if cap.get("present"):
+        zone = cap.get("zone") or "bottom"
+        params["alignment"] = _ZONE_ALIGN.get(zone, 2)
+        params["margin_v"] = {"top": 80, "middle": 0, "bottom": _MARGIN_V
+                              }.get(zone, _MARGIN_V)
+        rel_h = float(cap.get("rel_height") or 0.0)
+        if rel_h > 0:
+            # _FONT_SIZE on a 1920-tall canvas ~= 0.04 relative height.
+            params["font_size"] = int(round(
+                min(112, max(48, _FONT_SIZE * rel_h / 0.04))))
+    wpc = style_profile.get("words_per_caption")
+    if wpc:
+        params["max_words_per_line"] = int(min(6, max(1, wpc)))
+    return params
+
+
+def _probe_fps(video_path):
+    """Return the video's fps as float, or None."""
+    import subprocess as _sp
+    try:
+        r = _sp.run([_ffprobe_exe(), "-v", "error", "-select_streams", "v:0",
+                     "-show_entries", "stream=avg_frame_rate",
+                     "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+                    capture_output=True, text=True, timeout=30)
+        num, _, den = (r.stdout or "0/1").strip().partition("/")
+        fps = float(num) / float(den or 1)
+        return fps if fps > 0 else None
+    except Exception:
+        return None
+
+
+def build_motion_filter(style_profile, duration, fps=25.0):
+    """Build an ffmpeg motion filter from a style profile.
+
+    Two modes:
+    - directed: profile carries a single shot's "motion" (zoom_in/zoom_out/
+      pan) + "zoom_intensity" -- used by clone-as-is per reference shot.
+    - punch-ins: fast-cut references (>= _PUNCH_CUTS_PER_MIN) get alternating
+      zoom punch-ins on the reference's average shot rhythm.
+    Implemented with zoompan (frame-count based: crop's `t` is not
+    evaluable in w/h on all ffmpeg builds). Returns "" when the profile
+    asks for no motion.
+    """
+    if not isinstance(style_profile, dict) or duration <= 0:
+        return ""
+    fps = fps or 25.0
+    total = max(1, int(round(duration * fps)))
+    motion = style_profile.get("motion") or ""
+    intensity = float(style_profile.get("zoom_intensity") or 0.0)
+    amp = min(0.30, max(0.05, abs(intensity))) if intensity else 0.15
+
+    if motion == "zoom_in":
+        z = "1+{a:.3f}*on/{n}".format(a=amp, n=total)
+    elif motion == "zoom_out":
+        z = "1+{a:.3f}*(1-on/{n})".format(a=amp, n=total)
+    elif motion == "pan":
+        return ("zoompan=z=1.12:x='(iw-iw/zoom)*on/{n}':"
+                "y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps={f}"
+                ).format(n=total, f=_fmt_fps(fps))
+    else:
+        pacing = style_profile.get("pacing") or {}
+        cpm = float(pacing.get("cuts_per_min") or 0.0)
+        if cpm < _PUNCH_CUTS_PER_MIN:
+            return ""
+        period = min(4.0, max(1.0, float(pacing.get("avg_shot_len_s") or 2.0)))
+        fpp = max(1, int(round(period * fps)))
+        z = "1+{a:.3f}*abs(sin(PI*on/{fpp}))".format(a=amp, fpp=fpp)
+    return ("zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            "d=1:s=1080x1920:fps={f}").format(z=z, f=_fmt_fps(fps))
+
+
+def _fmt_fps(fps):
+    # zoompan wants a plain number; keep it simple and safe.
+    return str(int(round(fps))) if fps else "25"
+
+
+def _video_filter(crop_f, motion_f="", ass_path=None):
+    """Assemble the -vf chain. Identical to the old inline string when
+    motion_f is "" and ass_path is set (no behavior change)."""
+    parts = [crop_f.rstrip(","), "scale=1080:1920"]
+    if motion_f:
+        parts.append(motion_f)
+    if ass_path:
+        parts.append("subtitles='{}'".format(_escape_ass_path(ass_path)))
+    return ",".join(parts)
+
+
 def make_clip(video_path, start_sec, end_sec, out_path, style="karaoke",
-              highlight="yellow", face_track=True):
+              highlight="yellow", face_track=True, style_profile=None,
+              require_speech=True):
     """Cut one 9:16 clip with burned subtitles.
+
+    style_profile (dict, optional): a Style Lab profile from
+    style_analyzer.analyze_short() (or a saved clip_styles row). When set,
+    the clip copies the reference's caption zone/size, caption chunking,
+    camera motion, and music bed. When None, behavior is exactly the old one.
+
+    For convenience, a dict passed as `style` is treated as the profile.
+    require_speech=False renders silent windows too (used by clone-as-is for
+    reference shots with no speech in the matching user footage).
 
     Returns the output path. Raises on failure.
     """
+    # Convenience: style={...} also works as the profile.
+    if isinstance(style, dict):
+        style_profile, style = style, "karaoke"
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"video not found: {video_path}")
     if end_sec <= start_sec:
@@ -264,31 +396,38 @@ def make_clip(video_path, start_sec, end_sec, out_path, style="karaoke",
     if end_sec - start_sec > 180:
         raise ValueError("clips are capped at 3 minutes (YouTube Shorts limit)")
 
+    cap_params = style_caption_params(style_profile)
+
     # Word timings for the whole video; slice to our window.
     words = transcribe_word_timings(video_path)
     win_words = [w for w in words if w["end"] > start_sec and w["start"] < end_sec]
     if not win_words:
-        raise ValueError("no speech found in that range -- can't caption it")
-
-    # Trim dead air: start on the first spoken word.
-    start_sec = max(0.0, win_words[0]["start"] - 0.25)
+        if require_speech:
+            raise ValueError("no speech found in that range -- can't caption it")
+    else:
+        # Trim dead air: start on the first spoken word.
+        start_sec = max(0.0, win_words[0]["start"] - 0.25)
     offset = start_sec
 
-    ass_path = os.path.splitext(out_path)[0] + ".ass"
-    if style == "karaoke":
-        _write_ass_karaoke(win_words, ass_path, offset=offset, highlight=highlight)
-    else:
-        _write_srt_classic(win_words, ass_path, offset=offset)
+    ass_path = os.path.splitext(out_path)[0] + ".ass" if win_words else None
+    if ass_path:
+        if style == "karaoke":
+            _write_ass_karaoke(win_words, ass_path, offset=offset,
+                               highlight=highlight, **cap_params)
+        else:
+            _write_srt_classic(win_words, ass_path, offset=offset, **cap_params)
 
     crop = _smart_crop(video_path, start_sec, end_sec) if face_track else None
     if crop:
         crop_f = "crop={w}:{h}:{x}:0,".format(**crop)
     else:
         crop_f = "crop=ih*9/16:ih,"
-    vf = (crop_f +
-          "scale=1080:1920," +
-          "subtitles='{}'".format(_escape_ass_path(ass_path)))
     dur = round(end_sec - start_sec, 2)
+    motion_f = ""
+    if isinstance(style_profile, dict):
+        fps = _probe_fps(video_path) or 25.0
+        motion_f = build_motion_filter(style_profile, dur, fps)
+    vf = _video_filter(crop_f, motion_f=motion_f, ass_path=ass_path)
     cmd = [
         _ffmpeg_exe(), "-y",
         "-i", video_path,
@@ -302,17 +441,37 @@ def make_clip(video_path, start_sec, end_sec, out_path, style="karaoke",
         out_path,
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
-    try:
-        os.remove(ass_path)
-    except OSError:
-        pass
+    if ass_path:
+        try:
+            os.remove(ass_path)
+        except OSError:
+            pass
     if proc.returncode != 0 or not os.path.exists(out_path):
         raise RuntimeError(f"ffmpeg clip failed: {proc.stderr[-600:]}")
+
+    # Music bed: duck-mix the user's chosen track under the clip.
+    if (isinstance(style_profile, dict) and style_profile.get("music_bed")
+            and style_profile.get("music_path")):
+        from src.backend import studio as studio_mod
+        music_path = style_profile["music_path"]
+        if os.path.exists(music_path):
+            tmp_out = out_path + ".music.mp4"
+            try:
+                studio_mod.mix_music(out_path, music_path, tmp_out,
+                                     volume=float(
+                                         style_profile.get("music_volume", 0.25)))
+                os.replace(tmp_out, out_path)
+            except Exception:
+                try:
+                    os.remove(tmp_out)
+                except OSError:
+                    pass
     return out_path
 
 
 def make_clips(video_path, out_dir, num_clips=3, min_sec=20, max_sec=58,
-               style="karaoke", highlight="yellow", face_track=True):
+               style="karaoke", highlight="yellow", face_track=True,
+               style_profile=None):
     """Auto-pick the best viral moments and render them as captioned clips.
 
     Returns [{'path','title','start_sec','end_sec','score'}].
@@ -329,7 +488,8 @@ def make_clips(video_path, out_dir, num_clips=3, min_sec=20, max_sec=58,
     for i, m in enumerate(moments, 1):
         out_path = os.path.join(out_dir, f"{safe}_clip{i}.mp4")
         make_clip(video_path, m["start_sec"], m["end_sec"], out_path,
-                  style=style, highlight=highlight, face_track=face_track)
+                  style=style, highlight=highlight, face_track=face_track,
+                  style_profile=style_profile)
         clips.append({
             "path": out_path,
             "title": _make_title(m["text"]),
