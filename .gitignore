@@ -45,3 +45,7 @@ signal_prompt.txt
 # Free-agent local-only secrets (auto-created accounts, signup config)
 data/agent_config.json
 data/agent_accounts.json
+
+# User-local runtime data (never commit)
+assets/voice_presets.json
+src/data/hook_cache.json

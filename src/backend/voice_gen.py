@@ -72,8 +72,25 @@ async def _generate_audio_async(text: str, output_path: str, voice: str):
     srt_path = output_path.replace(".mp3", ".srt")
     with open(srt_path, "w", encoding="utf-8") as srt_file:
         srt_file.write(srt_content)
-        
-        
+
+    # ── Exact word timings (user report 2026-09-27: "subtitle and voice is
+    # different"). edge-tts tells us the EXACT words it spoke with 100ns
+    # offsets — write them as the <audio>.words.json cache so the pipeline
+    # NEVER needs faster-whisper (which mistranscribes accented TTS and put
+    # wrong words in the captions). transcribe_word_timings() picks this up
+    # from the cache and skips transcription entirely.
+    try:
+        from .captions import timed_words_from_edge_boundaries
+        exact_words = timed_words_from_edge_boundaries(boundaries)
+        if exact_words:
+            import json as _json
+            words_path = os.path.splitext(output_path)[0] + ".words.json"
+            with open(words_path, "w", encoding="utf-8") as wf:
+                _json.dump(exact_words, wf)
+            print(f"[VoiceGen] Saved {len(exact_words)} exact TTS word timings -> {os.path.basename(words_path)}")
+    except Exception as wt_err:
+        print(f"[VoiceGen] Exact word-timing note: {wt_err}")
+
     return output_path, srt_path
 
 

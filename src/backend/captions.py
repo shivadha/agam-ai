@@ -109,3 +109,126 @@ def load_word_timings(word_timings_path):
         return data if isinstance(data, list) else []
     except Exception:
         return []
+
+
+def timed_words_from_edge_boundaries(boundaries):
+    """Convert edge-tts boundary chunks to [{'word','start','end'}] (seconds).
+
+    edge-tts reports the EXACT words it spoke with 100ns-tick offsets, so
+    these timings need no transcription and can never mistranscribe.
+    Falls back to interpolating words inside SentenceBoundary chunks when
+    the service only returns sentence boundaries.
+    """
+    words = []
+    wbs = [b for b in (boundaries or []) if b.get("type") == "WordBoundary"]
+    if wbs:
+        for b in wbs:
+            text = (b.get("text") or "").strip()
+            if not text:
+                continue
+            try:
+                start = float(b.get("offset", 0)) / 10_000_000
+                end = (float(b.get("offset", 0)) + float(b.get("duration", 0))) / 10_000_000
+            except (TypeError, ValueError):
+                continue
+            words.append({"word": text, "start": round(start, 2), "end": round(end, 2)})
+        return words
+    # SentenceBoundary interpolation (same math voice_gen used for its SRT).
+    for sb in [b for b in (boundaries or []) if b.get("type") == "SentenceBoundary"]:
+        try:
+            offset = float(sb.get("offset", 0)) / 10_000_000
+            duration = float(sb.get("duration", 0)) / 10_000_000
+        except (TypeError, ValueError):
+            continue
+        sentence_words = (sb.get("text") or "").split()
+        if not sentence_words or duration <= 0:
+            continue
+        total_chars = sum(len(w) for w in sentence_words) or 1
+        cur = offset
+        for w in sentence_words:
+            w_dur = duration * len(w) / total_chars
+            words.append({"word": w, "start": round(cur, 2),
+                          "end": round(cur + w_dur, 2)})
+            cur += w_dur
+    return words
+
+
+def _norm_word(w):
+    import re as _re
+    return _re.sub(r"[^\w']", "", (w or "").lower())
+
+
+def reconcile_words(script_words, timed_words):
+    """Return timed words whose WORDS are the script's (what was spoken).
+
+    faster-whisper (tiny.en) mistranscribes accented TTS, which used to put
+    wrong words in the captions while the voice said the script. This aligns
+    the known script words to the timed words with difflib and re-emits the
+    SCRIPT words on the timed words' timestamps, so captions can never
+    disagree with the voice. Unmatched script words interpolate between
+    neighbouring timings; stray timed words are dropped. Output timings are
+    monotonic with end >= start.
+    """
+    import difflib
+    script_words = [w for w in (script_words or []) if (w or "").strip()]
+    timed_words = [t for t in (timed_words or [])
+                   if t and (t.get("word") or "").strip()]
+    if not script_words or not timed_words:
+        return []
+    norm_script = [_norm_word(w) for w in script_words]
+    norm_timed = [_norm_word(t["word"]) for t in timed_words]
+    sm = difflib.SequenceMatcher(None, norm_script, norm_timed, autojunk=False)
+    out = []
+
+    def _span(a, b):
+        s = float(timed_words[a]["start"])
+        e = float(timed_words[b]["end"])
+        return s, max(e, s + 0.01)
+
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            for si, tj in zip(range(i1, i2), range(j1, j2)):
+                s, e = _span(tj, tj)
+                out.append({"word": script_words[si], "start": round(s, 2),
+                            "end": round(e, 2)})
+        elif tag == "replace":
+            n_s, n_t = i2 - i1, j2 - j1
+            if n_t <= 0:
+                continue
+            t0, t1 = float(timed_words[j1]["start"]), float(timed_words[j2 - 1]["end"])
+            t1 = max(t1, t0 + 0.01 * n_s)
+            if n_s == n_t:
+                pairs = zip(range(i1, i2), range(j1, j2))
+                for si, tj in pairs:
+                    s, e = _span(tj, tj)
+                    out.append({"word": script_words[si], "start": round(s, 2),
+                                "end": round(e, 2)})
+            else:
+                # Spread the timed span evenly across the script words.
+                step = (t1 - t0) / n_s
+                for k, si in enumerate(range(i1, i2)):
+                    s = t0 + k * step
+                    out.append({"word": script_words[si], "start": round(s, 2),
+                                "end": round(s + step, 2)})
+        elif tag == "delete":
+            # Script words the transcription missed: interpolate between the
+            # nearest timed neighbours.
+            prev_end = float(out[-1]["end"]) if out else 0.0
+            nxt_start = (float(timed_words[j1]["start"]) if j1 < len(timed_words)
+                         else prev_end + 0.3 * (i2 - i1))
+            n = i2 - i1
+            span = max(0.0, nxt_start - prev_end)
+            step = span / n if n else 0
+            for k, si in enumerate(range(i1, i2)):
+                s = prev_end + k * step
+                out.append({"word": script_words[si], "start": round(s, 2),
+                            "end": round(s + max(step, 0.05), 2)})
+        # 'insert': stray timed words not in the script — dropped.
+
+    # Monotonicity repair: timings must never run backwards.
+    for k in range(1, len(out)):
+        if out[k]["start"] < out[k - 1]["start"]:
+            out[k]["start"] = out[k - 1]["start"]
+        if out[k]["end"] < out[k]["start"]:
+            out[k]["end"] = round(out[k]["start"] + 0.05, 2)
+    return out

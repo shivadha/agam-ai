@@ -784,7 +784,11 @@ class WorkflowEngine:
                     music_path=music_path, sfx_timeline=sfx_timeline,
                     viral_score=viral_score, topic_title=topic_title,
                     editing_style=editing_style,
-                    word_timings_path=word_timings_path
+                    word_timings_path=word_timings_path,
+                    # Exact words TTS spoke — lets the assembler reconcile
+                    # caption words to the voice and sync each scene's visuals
+                    # to its narration span (never an equal split).
+                    script_text=node_data.get('script') or self._find_in_state('script')
                 )
                 
                 result = {

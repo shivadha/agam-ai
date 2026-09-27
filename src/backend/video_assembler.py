@@ -565,11 +565,82 @@ def _regenerate_dead_video(image_path, scene, topic_title, duration, output_dir)
     return None
 
 
-def _build_caption_events(word_timings_path, subtitle_path):
+def _scene_time_boundaries(scenes, timed_words, total_duration):
+    """Per-scene (start, end) seconds so each scene's visuals cover exactly
+    the span where its narration is spoken.
+
+    The old code gave every scene an EQUAL share of the audio (total/n),
+    which desynced video from voice whenever scenes had different narration
+    lengths. Now each scene's span is derived from the word timings:
+    scene i owns the timed words matching its narration word count. Falls
+    back to narration-word-count proportional split when timings are absent.
+    """
+    n = max(1, len(scenes))
+    total_duration = max(0.1, float(total_duration or 0))
+    counts = [len((sc.get("narration") or "").split()) for sc in scenes]
+    total_words = sum(counts)
+
+    spans = []
+    tw = [t for t in (timed_words or [])
+          if t and t.get("word") and float(t.get("end", 0)) >= float(t.get("start", 0))]
+    if tw and total_words > 0:
+        # Walk the timed words sequentially, handing each scene a slice
+        # proportional to its narration word count.
+        cursor = 0
+        prev_e = 0.0
+        for i, c in enumerate(counts):
+            if i < len(counts) - 1:
+                take = round(len(tw) * c / total_words)
+            else:
+                take = len(tw) - cursor
+            take = max(0, min(take, len(tw) - cursor))
+            seg = tw[cursor:cursor + take]
+            if seg:
+                s = float(seg[0]["start"])
+                e = float(seg[-1]["end"])
+            else:
+                # Rounding left no timed words for this scene (or it has no
+                # narration): start where the previous scene ended.
+                s = e = prev_e
+            if i == 0:
+                s = 0.0
+            if i == len(counts) - 1:
+                e = total_duration
+            e = max(e, s + 0.25)
+            spans.append((round(s, 2), round(e, 2)))
+            cursor += take
+            prev_e = e
+    else:
+        # No timings: split proportionally to narration word counts.
+        cur = 0.0
+        for i, c in enumerate(counts):
+            frac = (c / total_words) if total_words > 0 else 1.0 / n
+            nxt = total_duration if i == len(counts) - 1 else cur + total_duration * frac
+            spans.append((round(cur, 2), round(max(nxt, cur + 0.25), 2)))
+            cur = nxt
+    # Monotonicity: no scene may start before the previous one ends.
+    fixed = []
+    prev_end = 0.0
+    for s, e in spans:
+        s = max(s, prev_end)
+        e = max(e, s + 0.25)
+        fixed.append((s, e))
+        prev_end = e
+    if fixed:
+        fixed[-1] = (fixed[-1][0], round(total_duration, 2))
+    return fixed
+
+
+def _build_caption_events(word_timings_path, subtitle_path, script_words=None):
     """Word-level caption events: [(words_list, active_word_idx, start, end)].
 
     Real speech timings (faster-whisper) preferred; falls back to the
     estimated even-division timings from the SRT. Also drives BGM ducking.
+
+    script_words (the exact words TTS spoke, in order): when given AND real
+    word timings exist, the timed words are RECONCILED to the script words
+    (captions.py:reconcile_words) so a mistranscription can never put wrong
+    words on screen — captions always match the voice.
     """
     caption_events = []
     try:
@@ -580,6 +651,17 @@ def _build_caption_events(word_timings_path, subtitle_path):
                 real_words = load_word_timings(word_timings_path)
             except Exception as wt_err:
                 print(f"[video_assembler] Word-timing load note: {wt_err}")
+
+        if real_words and script_words:
+            try:
+                from .captions import reconcile_words
+                fixed = reconcile_words(script_words, real_words)
+                if fixed:
+                    print(f"[video_assembler] Caption words reconciled to script "
+                          f"({len(fixed)} words) — captions match the voice.")
+                    real_words = fixed
+            except Exception as rc_err:
+                print(f"[video_assembler] Caption reconcile note: {rc_err}")
 
         if real_words:
             from .captions import chunk_words
@@ -665,7 +747,8 @@ def assemble_cinematic_video(
     viral_score: float = 85.0,
     topic_title: str = "PulseForge Video",
     editing_style: str = "auto",
-    word_timings_path: str = None
+    word_timings_path: str = None,
+    script_text: str = None,
 ) -> str:
     """
     Master video assembly function powered by the Viral Reel Intelligence Brain.
@@ -702,7 +785,22 @@ def assemble_cinematic_video(
     if not os.path.exists(hit_path): generate_procedural_hit(hit_path)
 
     # 2. Scene Compilation
-    scene_dur = total_duration / max(1, len(scenes))
+    # ── Word timings + script words: each scene's visuals must cover exactly
+    # the span where its narration is spoken (user report 2026-09-27: video
+    # "all messed up" — the old equal split desynced video from voice).
+    script_words = (script_text or "").split()
+    if not script_words:
+        script_words = [w for sc in scenes for w in (sc.get("narration") or "").split()]
+    timed_words = []
+    if word_timings_path:
+        try:
+            from .captions import load_word_timings
+            timed_words = load_word_timings(word_timings_path) or []
+        except Exception:
+            timed_words = []
+    scene_bounds = _scene_time_boundaries(scenes, timed_words, total_duration)
+    print(f"[video_assembler] Scene time spans: "
+          + ", ".join(f"{s:.1f}-{e:.1f}s" for s, e in scene_bounds))
     video_clips = []
     current_time = 0.0
     boundary_times = []
@@ -710,6 +808,7 @@ def assemble_cinematic_video(
     effects_list = ['zoom_burst_in', 'zoom_burst_out', 'whip_pan_left', 'whip_pan_right', 'speed_ramp', 'motion_blur_push', 'glitch_flash']
 
     for idx, scene in enumerate(scenes):
+        scene_dur = scene_bounds[idx][1] - scene_bounds[idx][0]
         clips_before = len(video_clips)
         video_paths = scene.get('video_paths', [])
         img_paths = scene.get('image_paths', [])
@@ -808,7 +907,7 @@ def assemble_cinematic_video(
     # Word timings first: speech intervals drive BGM ducking (music drops
     # low UNDER the narration, rises in the gaps). Built once, reused by
     # the karaoke captions in section 4.
-    caption_events = _build_caption_events(word_timings_path, subtitle_path)
+    caption_events = _build_caption_events(word_timings_path, subtitle_path, script_words)
     speech_intervals = [(s, e) for (_w, _i, s, e) in caption_events]
 
     # Auto-resolve emotion-matched background music if not explicitly provided
@@ -867,7 +966,7 @@ def assemble_cinematic_video(
     # caption_events was already built in section 3 (it also drives BGM
     # ducking); rebuild only if something cleared it.
     if not caption_events:
-        caption_events = _build_caption_events(word_timings_path, subtitle_path)
+        caption_events = _build_caption_events(word_timings_path, subtitle_path, script_words)
 
     overlay_clips = []
     # Karaoke captions are built as an ASS file and burned with ffmpeg's
