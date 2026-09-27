@@ -845,6 +845,232 @@ def api_clips_status(job_id):
     return jsonify({"status": "success", "job": job})
 
 
+# ── Clip Studio: YouTube import, random clips, music mixing ──
+_studio_jobs = {}
+_studio_lock = threading.Lock()
+
+
+def _studio_job_start(prefix):
+    job_id = f"{prefix}-" + datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+    with _studio_lock:
+        _studio_jobs[job_id] = {"status": "running", "result": None, "error": None}
+    return job_id
+
+
+def _studio_job_set(job_id, status, result=None, error=None):
+    with _studio_lock:
+        _studio_jobs[job_id] = {"status": status, "result": result, "error": error}
+
+
+def _studio_job_get(job_id):
+    with _studio_lock:
+        return _studio_jobs.get(job_id)
+
+
+def _studio_abspath(rel_path):
+    """Resolve a studio video path (relative to OUTPUT_DIR) safely."""
+    rel = (rel_path or "").strip().replace("\\", "/").lstrip("/")
+    if not rel or rel.startswith("..") or "/../" in rel:
+        return None
+    full = os.path.normpath(os.path.join(OUTPUT_DIR, rel))
+    if not full.startswith(os.path.abspath(OUTPUT_DIR) + os.sep):
+        return None
+    return full if os.path.exists(full) else None
+
+
+@app.route('/api/studio/import-youtube', methods=['POST'])
+@login_required
+def api_studio_import_youtube():
+    """Import a YouTube video (background job): {url}."""
+    from src.backend import studio
+    data = request.get_json() or {}
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({"status": "error", "message": "Provide a YouTube 'url'."}), 400
+    if not studio.is_youtube_url(url):
+        return jsonify({"status": "error",
+                        "message": "Only youtube.com / youtu.be links are accepted."}), 400
+    job_id = _studio_job_start("studio-import")
+
+    def _run():
+        try:
+            info = studio.download_youtube(url)
+            info["play_url"] = f"/output/{info['file']}"
+            _studio_job_set(job_id, "done", result=info)
+        except Exception as e:
+            _studio_job_set(job_id, "error", error=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "queued", "job_id": job_id})
+
+
+@app.route('/api/studio/import-status/<job_id>')
+@login_required
+def api_studio_import_status(job_id):
+    job = _studio_job_get(job_id)
+    if not job:
+        return jsonify({"status": "error", "message": "Unknown job id."}), 404
+    return jsonify({"status": "success", "job": job})
+
+
+@app.route('/api/studio/videos')
+@login_required
+def api_studio_videos():
+    """List studio videos (imported + recent renders)."""
+    from src.backend import studio
+    videos = []
+    seen = set()
+    studio_dir = os.path.join(OUTPUT_DIR, "studio")
+    if os.path.isdir(studio_dir):
+        for fname in sorted(os.listdir(studio_dir),
+                            key=lambda f: os.path.getmtime(os.path.join(studio_dir, f)),
+                            reverse=True):
+            if fname.lower().endswith((".mp4", ".mov", ".webm", ".mkv")):
+                fpath = os.path.join(studio_dir, fname)
+                rel = os.path.relpath(fpath, OUTPUT_DIR).replace("\\", "/")
+                seen.add(rel)
+                videos.append({
+                    "file": rel,
+                    "title": os.path.splitext(fname)[0],
+                    "duration_sec": round(studio.probe_duration(fpath), 1),
+                    "play_url": f"/output/{rel}",
+                    "created": datetime.datetime.fromtimestamp(
+                        os.path.getmtime(fpath)).strftime("%Y-%m-%d %H:%M:%S"),
+                })
+    # Plus the most recent top-level renders so there's always something to clip.
+    if os.path.isdir(OUTPUT_DIR):
+        top = []
+        for fname in os.listdir(OUTPUT_DIR):
+            if fname.lower().endswith((".mp4", ".mov", ".webm", ".mkv")):
+                fpath = os.path.join(OUTPUT_DIR, fname)
+                rel = fname
+                if rel not in seen:
+                    top.append((os.path.getmtime(fpath), fpath, rel))
+        top.sort(reverse=True)
+        for _, fpath, rel in top[:12]:
+            videos.append({
+                "file": rel,
+                "title": os.path.splitext(os.path.basename(rel))[0],
+                "duration_sec": round(studio.probe_duration(fpath), 1),
+                "play_url": f"/output/{rel}",
+                "created": datetime.datetime.fromtimestamp(
+                    os.path.getmtime(fpath)).strftime("%Y-%m-%d %H:%M:%S"),
+            })
+    return jsonify({"status": "success", "videos": videos})
+
+
+@app.route('/api/studio/random-clips', methods=['POST'])
+@login_required
+def api_studio_random_clips():
+    """Cut N random karaoke-captioned clips from a video (background job)."""
+    from src.backend import studio
+    data = request.get_json() or {}
+    vpath = _studio_abspath(data.get('video_file'))
+    if not vpath:
+        return jsonify({"status": "error",
+                        "message": "Provide a valid 'video_file' from /api/studio/videos."}), 400
+    num = max(1, min(10, int(data.get('num_clips') or 3)))
+    lo = max(3.0, float(data.get('min_sec') or 15))
+    hi = max(lo, float(data.get('max_sec') or 45))
+    seed = data.get('seed')
+    try:
+        seed = int(seed) if seed not in (None, "") else None
+    except (TypeError, ValueError):
+        seed = None
+    # Optional exact window (from the trim UI): render just that one clip.
+    fixed = None
+    try:
+        fs = data.get('start_sec')
+        fe = data.get('end_sec')
+        if fs not in (None, "") and fe not in (None, ""):
+            fixed = (max(0.0, float(fs)), float(fe))
+            if not fixed[1] > fixed[0]:
+                fixed = None
+    except (TypeError, ValueError):
+        fixed = None
+    job_id = _studio_job_start("studio-clips")
+
+    def _run():
+        try:
+            duration = studio.probe_duration(vpath)
+            if not duration:
+                raise RuntimeError("could not read video duration")
+            out_dir = os.path.join(OUTPUT_DIR, "studio", f"clips_{job_id}")
+            if fixed:
+                start, end = fixed
+                if end > duration:
+                    raise ValueError(
+                        f"clip end {end:.1f}s is past the video duration {duration:.1f}s")
+                one = studio.render_single_clip(vpath, start, end, out_dir)
+                one["play_url"] = f"/output/{one['file']}"
+                res = {"clips": [one], "skipped": 0}
+            else:
+                res = studio.render_random_clips(vpath, duration, num, lo, hi,
+                                                 out_dir, seed=seed)
+                for c in res["clips"]:
+                    c["play_url"] = f"/output/{c['file']}"
+            _studio_job_set(job_id, "done", result=res)
+        except Exception as e:
+            _studio_job_set(job_id, "error", error=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "queued", "job_id": job_id})
+
+
+@app.route('/api/studio/clips-status/<job_id>')
+@login_required
+def api_studio_clips_status(job_id):
+    job = _studio_job_get(job_id)
+    if not job:
+        return jsonify({"status": "error", "message": "Unknown job id."}), 404
+    return jsonify({"status": "success", "job": job})
+
+
+@app.route('/api/studio/add-music', methods=['POST'])
+@login_required
+def api_studio_add_music():
+    """Mix a library music track under a video (background job)."""
+    from src.backend import studio
+    data = request.get_json() or {}
+    vpath = _studio_abspath(data.get('video_file'))
+    if not vpath:
+        return jsonify({"status": "error",
+                        "message": "Provide a valid 'video_file' from /api/studio/videos."}), 400
+    try:
+        sound_id = int(data.get('sound_id'))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error",
+                        "message": "Provide a numeric 'sound_id' from the audio library."}), 400
+    volume = max(0.0, min(0.8, float(data.get('volume') or 0.25)))
+    job_id = _studio_job_start("studio-music")
+
+    def _run():
+        try:
+            snd = studio.resolve_sound_path(sound_id)
+            out_path = os.path.join(OUTPUT_DIR, "studio", f"music_{job_id}.mp4")
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            studio.mix_music(vpath, snd["path"], out_path, volume=volume)
+            rel = os.path.relpath(out_path, OUTPUT_DIR).replace("\\", "/")
+            _studio_job_set(job_id, "done", result={
+                "file": rel, "play_url": f"/output/{rel}",
+                "music": snd["name"], "volume": volume,
+            })
+        except Exception as e:
+            _studio_job_set(job_id, "error", error=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "queued", "job_id": job_id})
+
+
+@app.route('/api/studio/music-status/<job_id>')
+@login_required
+def api_studio_music_status(job_id):
+    job = _studio_job_get(job_id)
+    if not job:
+        return jsonify({"status": "error", "message": "Unknown job id."}), 404
+    return jsonify({"status": "success", "job": job})
+
+
 # ── System self-check: ensure everything a workflow needs is installed/running ──
 @app.route('/api/system/bootstrap', methods=['GET'])
 @login_required

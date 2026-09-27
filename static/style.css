@@ -1059,3 +1059,63 @@ select option:checked {
     color: #00FFAA !important;
     font-weight: 600 !important;
 }
+
+/* ── Clip Studio ───────────────────────────────────────────── */
+.clip-steps { display: flex; flex-direction: column; gap: 0.6rem; }
+.clip-step { display: flex; gap: 0.7rem; align-items: flex-start; padding: 0.6rem 0.7rem;
+    border-radius: 10px; border: 1px solid transparent; transition: all 0.2s; }
+.clip-step.active { border-color: var(--border-glow, #4fc3f7); background: rgba(79,195,247,0.08); }
+.clip-step-num { flex-shrink: 0; width: 1.7rem; height: 1.7rem; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem;
+    background: linear-gradient(135deg, #4fc3f7, #7c4dff); color: #fff; }
+.clip-step p { margin: 0.15rem 0 0; font-size: 0.8rem; opacity: 0.75; }
+.clip-step strong { font-size: 0.9rem; }
+
+.clip-card { background: var(--surface, #141a26); border: 1px solid var(--border, #263042);
+    border-radius: 14px; padding: 1.1rem 1.2rem; margin-bottom: 1.1rem; }
+.clip-card-title { margin: 0 0 0.8rem; font-size: 1.05rem; }
+.clip-sub { margin: 1rem 0 0.5rem; font-size: 0.9rem; opacity: 0.8; }
+.clip-row { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-top: 0.7rem; }
+.clip-input { flex: 1; min-width: 220px; padding: 0.6rem 0.8rem; border-radius: 8px;
+    border: 1px solid var(--border, #263042); background: var(--bg, #0d1117);
+    color: inherit; font-family: inherit; font-size: 0.9rem; }
+.clip-num { width: 5.2rem; padding: 0.45rem 0.5rem; border-radius: 8px;
+    border: 1px solid var(--border, #263042); background: var(--bg, #0d1117);
+    color: inherit; font-family: inherit; font-size: 0.9rem; }
+.clip-label { display: flex; align-items: center; gap: 0.45rem; font-size: 0.85rem; opacity: 0.9; }
+.clip-time { font-variant-numeric: tabular-nums; font-size: 0.85rem; opacity: 0.8; min-width: 7rem; }
+.clip-status { margin-top: 0.6rem; font-size: 0.85rem; min-height: 1.2em; }
+.clip-status.error { color: #ff6b6b; }
+.clip-status.ok { color: #51cf66; }
+.clip-muted { opacity: 0.6; font-size: 0.85rem; padding: 0.4rem 0; }
+
+.clip-video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 0.8rem; margin-top: 0.6rem; }
+.clip-video-card { border: 2px solid var(--border, #263042); border-radius: 10px; overflow: hidden;
+    cursor: pointer; background: #000; transition: border-color 0.2s, transform 0.2s; }
+.clip-video-card:hover { transform: translateY(-2px); border-color: var(--border-glow, #4fc3f7); }
+.clip-video-card.selected { border-color: #51cf66; box-shadow: 0 0 12px rgba(81,207,102,0.35); }
+.clip-video-card video { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; background: #000; }
+.clip-video-meta { padding: 0.45rem 0.6rem; font-size: 0.78rem; }
+.clip-video-meta .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.clip-video-meta .d { opacity: 0.65; font-variant-numeric: tabular-nums; }
+.clip-video-actions { display: flex; gap: 0.4rem; padding: 0 0.6rem 0.55rem; }
+.clip-dl { font-size: 0.75rem; color: var(--accent, #4fc3f7); text-decoration: none; }
+.clip-dl:hover { text-decoration: underline; }
+
+.clip-player-wrap { position: relative; background: #000; border-radius: 10px; overflow: hidden;
+    max-width: 640px; }
+.clip-player { width: 100%; max-height: 420px; display: block; background: #000; }
+.clip-player-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    text-align: center; color: #8b95a7; font-size: 0.9rem; line-height: 1.6; pointer-events: none; }
+
+.clip-track-list { display: flex; flex-direction: column; gap: 0.4rem; max-height: 260px;
+    overflow-y: auto; margin-bottom: 0.4rem; }
+.clip-track-row { display: flex; align-items: center; gap: 0.7rem; padding: 0.5rem 0.7rem;
+    border: 1px solid var(--border, #263042); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+.clip-track-row:hover { border-color: var(--border-glow, #4fc3f7); }
+.clip-track-row.selected { border-color: #51cf66; background: rgba(81,207,102,0.08); }
+.clip-track-play { flex-shrink: 0; width: 2rem; height: 2rem; border-radius: 50%; border: 1px solid var(--border, #263042);
+    background: transparent; color: inherit; cursor: pointer; font-size: 0.85rem; }
+.clip-track-name { flex: 1; font-size: 0.88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.clip-track-dur { font-size: 0.78rem; opacity: 0.6; font-variant-numeric: tabular-nums; }

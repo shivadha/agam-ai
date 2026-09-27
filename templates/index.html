@@ -38,6 +38,7 @@
             <div class="nav-page-tabs">
                 <button class="nav-page-tab active" id="tabNewsFeed">📰 News Feed</button>
                 <button class="nav-page-tab" id="tabViralHits">🔥 Viral Hits</button>
+                <button class="nav-page-tab" id="tabClipping">✂️ Clipping</button>
                 <a href="/automation" class="nav-page-tab">⚙️ Automation</a>
             </div>
 
@@ -244,6 +245,114 @@
             </div>
 
             <div id="videoGrid" class="video-grid hidden"></div>
+        </section>
+    </main>
+
+    <!-- ── Clip Studio ── -->
+    <main class="main-layout hidden" id="clippingSection">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <div class="sidebar-header">
+                    <span class="sidebar-header-icon">✂️</span>
+                    <span class="sidebar-header-text">Clip Studio Steps</span>
+                </div>
+                <div class="clip-steps">
+                    <div class="clip-step" data-step="1">
+                        <span class="clip-step-num">1</span>
+                        <div><strong>Connect video</strong><p>Paste a YouTube link or pick a video.</p></div>
+                    </div>
+                    <div class="clip-step" data-step="2">
+                        <span class="clip-step-num">2</span>
+                        <div><strong>Preview &amp; trim</strong><p>Click the video to play/pause, mark start &amp; end.</p></div>
+                    </div>
+                    <div class="clip-step" data-step="3">
+                        <span class="clip-step-num">3</span>
+                        <div><strong>Add music</strong><p>Pick a track, set volume, mix it in.</p></div>
+                    </div>
+                    <div class="clip-step" data-step="4">
+                        <span class="clip-step-num">4</span>
+                        <div><strong>Random clips</strong><p>Auto-cut captioned clips, ready to post.</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div class="sidebar-section">
+                <div class="sidebar-header">
+                    <span class="sidebar-header-icon">💡</span>
+                    <span class="sidebar-header-text">Tips</span>
+                </div>
+                <div class="sidebar-tip-box">
+                    <p>Random clips get <strong>karaoke word-highlight captions</strong> burned in, reframed to 9:16. Windows with no speech are skipped automatically.</p>
+                </div>
+            </div>
+        </aside>
+
+        <section class="content-area">
+            <div class="content-header-bar">
+                <div class="content-heading-group">
+                    <h2 class="content-main-heading">✂️ Clip Studio</h2>
+                    <p class="content-sub-heading">Import a YouTube video, preview &amp; trim it, add background music, and auto-cut random viral clips.</p>
+                </div>
+                <div class="stats-bar">
+                    <div class="stat-chip" id="clipStudioStat">🎬 Ready</div>
+                </div>
+            </div>
+
+            <div class="clip-card" id="clipStep1Card">
+                <h3 class="clip-card-title">1️⃣ Connect a video</h3>
+                <div class="clip-row">
+                    <input id="ytUrlInput" class="clip-input" type="url"
+                           placeholder="Paste YouTube link (watch / shorts / youtu.be)…" autocomplete="off" />
+                    <button class="btn-refresh" id="ytImportBtn"><span class="icon-spin-target">⬇</span> Import</button>
+                </div>
+                <div class="clip-status" id="ytImportStatus"></div>
+                <h4 class="clip-sub">or pick a video</h4>
+                <div id="studioVideoList" class="clip-video-grid"></div>
+            </div>
+
+            <div class="clip-card" id="clipStep2Card">
+                <h3 class="clip-card-title">2️⃣ Preview &amp; trim</h3>
+                <div class="clip-player-wrap">
+                    <video id="studioPlayer" class="clip-player" controls preload="metadata" playsinline></video>
+                    <div class="clip-player-empty" id="studioPlayerEmpty">Pick a video above to preview it here.<br>Click the video to play / pause.</div>
+                </div>
+                <div class="clip-row">
+                    <span class="clip-time" id="studioTimeReadout">0:00 / 0:00</span>
+                    <button class="sort-btn" id="setClipStartBtn" title="Use current playback position">⤵ Set start</button>
+                    <input id="clipStartInput" class="clip-num" type="number" min="0" step="0.5" value="0" title="Clip start (seconds)" />
+                    <button class="sort-btn" id="setClipEndBtn" title="Use current playback position">⤴ Set end</button>
+                    <input id="clipEndInput" class="clip-num" type="number" min="1" step="0.5" value="30" title="Clip end (seconds)" />
+                    <button class="btn-refresh" id="cutTrimBtn">✂️ Cut this clip</button>
+                </div>
+                <div class="clip-status" id="trimStatus"></div>
+            </div>
+
+            <div class="clip-card" id="clipStep3Card">
+                <h3 class="clip-card-title">3️⃣ Add background music</h3>
+                <div id="musicTrackList" class="clip-track-list"><div class="clip-muted">Loading tracks…</div></div>
+                <div class="clip-row">
+                    <label class="clip-label">Volume
+                        <input id="musicVolume" type="range" min="0" max="0.8" step="0.05" value="0.25" />
+                    </label>
+                    <span class="clip-time" id="musicVolumeVal">0.25</span>
+                    <button class="btn-refresh" id="mixMusicBtn">🎵 Mix music into video</button>
+                </div>
+                <div class="clip-status" id="musicMixStatus"></div>
+            </div>
+
+            <div class="clip-card" id="clipStep4Card">
+                <h3 class="clip-card-title">4️⃣ Random clips</h3>
+                <div class="clip-row">
+                    <label class="clip-label">Clips <input id="numClipsInput" class="clip-num" type="number" value="3" min="1" max="10" /></label>
+                    <label class="clip-label">Min sec <input id="minSecInput" class="clip-num" type="number" value="15" min="3" max="120" /></label>
+                    <label class="clip-label">Max sec <input id="maxSecInput" class="clip-num" type="number" value="45" min="5" max="170" /></label>
+                    <button class="btn-refresh" id="randomClipBtn"><span class="icon-spin-target">🎲</span> Random Clip</button>
+                </div>
+                <div class="clip-status" id="randomClipStatus"></div>
+                <div id="randomClipGrid" class="clip-video-grid"></div>
+            </div>
         </section>
     </main>
 
