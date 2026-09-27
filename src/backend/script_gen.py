@@ -240,14 +240,16 @@ def _chat_via_chain(system_prompt: str, user_prompt: str, model_name: str = "GPT
                 print(f"[script_gen] [{tag}] Groq attempt failed ({g_model}): {g_err}")
 
     # 4. Google Gemini API (AI Studio free tier: no card, ~1,500 req/day).
-    # gemini-2.0-flash was shut down 2026-06-01 — do not use.
+    # 2026-09-27: Google retired 2.x for new API keys; current lineup is 3.x.
+    # gemini-3.8-flash is the flagship, 3.5-flash-lite the cheap/fast one.
+    # 503 (high demand) falls through to the next model automatically.
     gemini_key = clean_key if ("gemini" in model_name.lower()) else (
         os.environ.get("GEMINI_API_KEY", "").strip()
         or os.environ.get("GOOGLE_AI_STUDIO_KEY", "").strip()
         or clean_key)
     if not content_str and gemini_key:
         print(f"[script_gen] [{tag}] Routing to Google Gemini API...")
-        for gem_model in ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"]:
+        for gem_model in ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{gem_model}:generateContent?key={gemini_key}"
                 payload = {

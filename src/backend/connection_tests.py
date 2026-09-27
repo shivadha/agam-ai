@@ -153,13 +153,16 @@ def test_llm(model_name: str = "", api_key: str = "") -> dict:
         note("Gemini")
         try:
             r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gem_key}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={gem_key}",
                 headers={"Content-Type": "application/json"},
                 json={"contents": [{"parts": [{"text": "ping"}]}]},
                 timeout=12,
             )
             if r.status_code == 200:
-                return _ok("Google Gemini", "Gemini 2.5 Flash is live.", t0)
+                return _ok("Google Gemini", "Gemini 3.8 Flash is live.", t0)
+            if r.status_code in (429, 503):
+                # key valid; quota spent or model busy right now
+                return _ok("Google Gemini", "Gemini key valid (model busy/quota, will retry).", t0)
         except Exception:
             pass
 
