@@ -502,6 +502,11 @@ def generate_images_for_scenes(
 
             # Apply Style Matrix preset to prompt
             full_prompt = f"{base_prompt}, {style_suffix}" if style_suffix not in base_prompt else base_prompt
+            # Relevance guard: providers love rendering gibberish text/logos —
+            # ban them in every prompt so the image stays on-topic.
+            _no_text = "no text, no words, no letters, no captions, no logos, no watermarks"
+            if "no text" not in full_prompt.lower():
+                full_prompt = f"{full_prompt}, {_no_text}"
 
             path = generate_image(
                 prompt=full_prompt,
@@ -571,6 +576,10 @@ def generate_image(
     when every provider failed.
     """
     base_seed = (int(time.time() * 1000) + scene_index * 1337 + hash(prompt)) % 1000000
+    # Relevance guard (same as batch path): ban rendered text/logos.
+    _no_text = "no text, no words, no letters, no captions, no logos, no watermarks"
+    if "no text" not in prompt.lower():
+        prompt = f"{prompt}, {_no_text}"
     for attempt in range(max_attempts):
         seed = (base_seed + attempt * 7919) % 1000000
         try:

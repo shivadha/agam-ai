@@ -339,7 +339,34 @@ class WorkflowEngine:
                     (self.workflow.get('article') or {}).get('topic') or 
                     'AI Trends'
                 )
+                # -- STEP 1: title + description FIRST, saved to the run row --
+                # The reel script is written FROM these (never the reverse):
+                # every later step (script -> image prompts -> video prompts)
+                # grounds itself in the same saved title/topic.
+                title = (node_data.get('title')
+                         or self._find_in_state('title') or '').strip()
+                description = (node_data.get('description')
+                               or self._find_in_state('description') or '').strip()
+                if not title:
+                    title = f"{topic_title}: The Untold Story"
+                if not description:
+                    description = (f"Breaking breakdown of {topic_title}. "
+                                   "Watch till the end to discover what happened next! "
+                                   "#Shorts #Trending")
+                try:
+                    self._db.save_run_title_description(self.run_id, title, description)
+                    print(f"[gen-script] Saved title/description to run {self.run_id[:8]}: {title[:60]}")
+                except Exception as _td_err:
+                    print(f"[gen-script] title/description DB save note: {_td_err}")
                 custom_prompt = node_data.get('custom_prompt', '')
+                # -- STEP 2: the script prompt carries the saved title +
+                # description so the AI writes a script that delivers on them.
+                custom_prompt += (
+                    "\n\nVIDEO TITLE (the script MUST deliver on this exact promise, "
+                    "one topic only, no invented names): \"" + title + "\""
+                    "\nVIDEO DESCRIPTION: " + description +
+                    "\nWrite the script to match this title and description exactly."
+                )
                 ai_model = node_data.get('model', 'GPT-4o')
                 custom_api_key = node_data.get('api_key', '')
                 visual_style = node_data.get('visual_style') or self._find_in_state('visual_style') or self.workflow.get('visual_style') or 'cinema_8k'
@@ -392,10 +419,10 @@ class WorkflowEngine:
                     "topic": topic_title,
                     "topic_title": topic_title,
                     "visual_style": visual_style,
-                    "title": script_data.get('title', topic_title),
+                    "title": title,
                     "script": script_data.get('script', ''),
                     "scenes": scenes_list,
-                    "description": script_data.get('description', ''),
+                    "description": description,
                     "tags": script_data.get('tags', [])
                 }
 
@@ -444,7 +471,10 @@ class WorkflowEngine:
                 if found_script:
                     script_text = found_script
                         
-                voice = node_data.get('voice', 'en-US-ChristopherNeural')
+                # Default: Indian English (user requirement 2026-09-27) —
+                # en-IN-PrabhatNeural via Edge-TTS. The node config can still
+                # override with any other voice.
+                voice = node_data.get('voice', 'en-IN-PrabhatNeural')
                 provider = node_data.get('provider', 'auto')
                 # ── Signature voice preset (optional) ──
                 # A saved channel voice overrides the per-node voice/provider

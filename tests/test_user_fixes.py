@@ -184,15 +184,15 @@ def test_fetch_viral_music(monkeypatch):
     assert "error" not in stats
 
 
-# ── Bug 3: 7s image-to-video ─────────────────────────────────────────────────
+# ── Bug 3: 9s image-to-video (user: "more than 8 seconds") ────────────────────
 
-def test_min_shot_seconds_is_7():
-    assert video_gen_ai.MIN_SHOT_SECONDS == 7.0
+def test_min_shot_seconds_is_9():
+    assert video_gen_ai.MIN_SHOT_SECONDS == 9.0
 
 
-def test_generate_video_from_image_clamps_to_7():
+def test_generate_video_from_image_clamps_to_9():
     src = inspect.getsource(video_gen_ai.generate_video_from_image)
-    assert "duration: float = 7.0" in src
+    assert "duration: float = 9.0" in src
     assert "max(MIN_SHOT_SECONDS, duration)" in src
 
 

@@ -165,6 +165,8 @@ def init_db():
             CREATE TABLE IF NOT EXISTS workflow_runs (
                 run_id      TEXT PRIMARY KEY,
                 name        TEXT,
+                title       TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
                 status      TEXT NOT NULL DEFAULT 'running',
                 error       TEXT,
                 started_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -244,6 +246,19 @@ def init_db():
                 print("[DB] Added 'strategy' column to agent_jobs table.")
             except Exception as e:
                 print(f"[DB] Migration note: {e}")
+
+        # Auto-migration: title/description on workflow_runs — the run's
+        # title + description are decided FIRST and the reel script is
+        # written FROM them, so they must live on the run row.
+        for _col in ("title", "description"):
+            try:
+                c.execute(f"SELECT {_col} FROM workflow_runs LIMIT 1")
+            except sqlite3.OperationalError:
+                try:
+                    c.execute(f"ALTER TABLE workflow_runs ADD COLUMN {_col} TEXT NOT NULL DEFAULT ''")
+                    print(f"[DB] Added '{_col}' column to workflow_runs table.")
+                except Exception as e:
+                    print(f"[DB] Migration note: {e}")
 
         # Seed admin user
         existing = c.execute(
@@ -532,6 +547,38 @@ def finish_workflow_run(run_id: str, status: str, error: str = "") -> None:
             conn.close()
 
 
+def save_run_title_description(run_id: str, title: str, description: str) -> None:
+    """Persist the run's title + description BEFORE the script is written.
+
+    The reel script is generated FROM these (not the other way round), so
+    they are saved first — the script chain grounds every later step
+    (script -> image prompts -> video prompts) in the same title/topic.
+    """
+    with _db_lock:
+        conn = get_db()
+        try:
+            conn.execute(
+                "UPDATE workflow_runs SET title = ?, description = ? WHERE run_id = ?",
+                (title or "", description or "", run_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_run_title_description(run_id: str) -> dict:
+    with _db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT title, description FROM workflow_runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            return {"title": row[0] if row else "", "description": row[1] if row else ""}
+        finally:
+            conn.close()
+
+
 def save_node_result(run_id: str, node_id: str, node_type: str, status: str,
                      result_json: str = "", inputs_json: str = "",
                      error: str = "", recovered_via: str = "") -> int:
@@ -633,7 +680,7 @@ def get_workflow_runs(limit: int = 30) -> list:
         conn = get_db()
         try:
             rows = conn.execute(
-                "SELECT run_id, name, status, error, started_at, finished_at"
+                "SELECT run_id, name, title, description, status, error, started_at, finished_at"
                 " FROM workflow_runs ORDER BY started_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()

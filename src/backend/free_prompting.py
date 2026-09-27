@@ -89,6 +89,13 @@ def ensure_image_prompts(scenes: list, main_script: str = "",
         f"cinematic still, {visual_style} style, 9:16 vertical. Describe "
         f"subject, dramatic lighting, atmosphere, environment. "
         f"Each prompt must be unique to its scene's narration.\n\n"
+        f"HARD RULES (an irrelevant image ruins the video):\n"
+        f"1. Name CONCRETE visual nouns (e.g. 'a rusted fishing trawler at dawn', "
+        f"not 'a boat'; 'a Mumbai local train platform at rush hour', not 'a station').\n"
+        f"2. The image must illustrate the scene's narration literally — if the "
+        f"narration mentions a person/place/object, that exact thing dominates the frame.\n"
+        f"3. NEVER include text, words, letters, logos, watermarks, or captions in the image.\n"
+        f"4. One clear focal subject per image; no collage, no split-screen.\n\n"
         + "\n".join(numbered))
     text = _ask_chatgpt(system, user, max_new_tokens=2000)
     prompts = _parse_numbered(text, len(missing))

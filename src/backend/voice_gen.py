@@ -224,6 +224,26 @@ def _generate_audio_kokoro(text: str, output_path: str, voice: str = "af_heart")
     return output_path, srt_path
 
 
+def _resolve_tts_provider(voice: str, provider: str) -> str:
+    """Decide which TTS engine renders a request: kokoro | edge-tts | elevenlabs.
+
+    Edge neural voices (e.g. en-IN-PrabhatNeural) ALWAYS go to Edge-TTS —
+    Kokoro can't render those voice IDs and would silently swap in af_heart,
+    losing the requested accent.
+    """
+    v = (voice or "").lower()
+    p = (provider or "auto").lower()
+    if v.startswith("elevenlabs") or p == "elevenlabs":
+        return "elevenlabs"
+    if v.startswith(("af_", "am_", "kokoro")):
+        return "kokoro"
+    if "neural" in v:
+        return "edge-tts"
+    if p in ("kokoro", "default", "auto"):
+        return "kokoro"
+    return p  # explicit provider choice respected
+
+
 def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", provider: str = "kokoro", api_key: str = None):
     """
     Generates an audio file from the given text.
@@ -243,8 +263,9 @@ def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", 
     else:
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
+    resolved = _resolve_tts_provider(voice, provider)
     eleven_key = api_key or os.environ.get("ELEVENLABS_API_KEY", "").strip()
-    is_eleven = (provider == "elevenlabs" or voice.lower().startswith("elevenlabs")) and bool(eleven_key)
+    is_eleven = resolved == "elevenlabs" and bool(eleven_key)
 
     if is_eleven:
         try:
@@ -253,8 +274,13 @@ def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", 
         except Exception as e:
             print(f"[VoiceGen] ElevenLabs failed ({e}). Gracefully falling back to Kokoro-82M...")
 
+    if resolved == "elevenlabs" and not eleven_key:
+        # Asked for ElevenLabs but no key present — Edge-TTS, never a
+        # silent voice swap.
+        resolved = "edge-tts"
+
     # Primary recommendation: Kokoro-82M (ElevenLabs quality, 100% free local)
-    is_kokoro = (provider in ["kokoro", "auto", "default"]) or voice.lower().startswith(("af_", "am_", "kokoro"))
+    is_kokoro = resolved == "kokoro"
     if is_kokoro:
         try:
             return _generate_audio_kokoro(text, output_path, voice=voice)
@@ -262,7 +288,7 @@ def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", 
             print(f"[VoiceGen] Kokoro-82M failed ({ke}). Gracefully falling back to Edge-TTS neural voice...")
 
     # Fallback / Default: Edge-TTS
-    fallback_voice = voice if not voice.lower().startswith(("elevenlabs", "af_", "am_", "kokoro")) else "en-US-ChristopherNeural"
+    fallback_voice = voice if not voice.lower().startswith(("elevenlabs", "af_", "am_", "kokoro")) else "en-IN-PrabhatNeural"
     print(f"[VoiceGen] Generating audio with Edge-TTS voice '{fallback_voice}' to {output_path}...")
     try:
         audio_p, vtt_p = asyncio.run(_generate_audio_async(text, output_path, fallback_voice))

@@ -182,7 +182,7 @@ def _fb_tts_alt_voices(engine, node, node_data, inputs, primary_error):
     if not script_text:
         raise RuntimeError("no script text available for TTS retry")
     node_id = (node or {}).get("id", "n")
-    for voice in ("en-US-ChristopherNeural", "en-US-AriaNeural", "en-IN-PrabhatNeural"):
+    for voice in ("en-IN-PrabhatNeural", "en-IN-NeerjaNeural", "en-US-AriaNeural"):
         out = os.path.join(OUTPUT_DIR, f"audio_{node_id}_fb_{voice[:5]}.mp3")
         audio_path, vtt_path = generate_audio(
             script_text, out, voice=voice, provider="edge-tts",

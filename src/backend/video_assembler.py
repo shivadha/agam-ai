@@ -357,7 +357,7 @@ def create_advanced_motion_effect(image_path, duration, width, height, effect_ty
         return clip
 
 
-def prepare_video_shot(video_path, duration, width, height):
+def prepare_video_shot(video_path, duration, width, height, fallback_image=None):
     """
     Loads an AI-generated video file, scales and crops it to vertical 9:16 aspect ratio.
 
@@ -365,17 +365,27 @@ def prepare_video_shot(video_path, duration, width, height):
     Burns drift on the clip's final frame. (The old vfx.Loop fill made a 1s
     clip visibly snap back and repeat for the whole shot — "animated for a
     second then repeats".)
+
+    If the video cannot be loaded, the scene's image is animated with a
+    motion effect instead — NEVER a black screen.
     """
     from moviepy import VideoFileClip, ColorClip, concatenate_videoclips
+
+    def _image_fallback(reason):
+        if fallback_image and os.path.exists(fallback_image):
+            print(f"[video_assembler] {reason}; using scene image instead of black.")
+            return create_advanced_motion_effect(
+                fallback_image, duration, width, height, "zoom_in")
+        print(f"[video_assembler] {reason}; no image available — dark placeholder.")
+        return ColorClip(size=(width, height), color=(15, 15, 25), duration=duration)
+
     try:
         clip = VideoFileClip(video_path)
     except Exception as e:
-        print(f"[video_assembler] Error loading AI video {video_path}: {e}")
-        return ColorClip(size=(width, height), color=(0, 0, 0), duration=duration)
+        return _image_fallback(f"Error loading AI video {video_path}: {e}")
 
     if not getattr(clip, "duration", 0):
-        print(f"[video_assembler] AI video has no duration ({video_path}); using fallback.")
-        return ColorClip(size=(width, height), color=(0, 0, 0), duration=duration)
+        return _image_fallback(f"AI video has no duration ({video_path})")
 
     img_ratio = clip.w / clip.h
     target_ratio = width / height
@@ -500,6 +510,96 @@ def make_progress_bar(duration, width, bar_height=14, color=(0, 255, 170)):
     return VideoClip(make_frame, duration=duration)
 
 
+def _build_caption_events(word_timings_path, subtitle_path):
+    """Word-level caption events: [(words_list, active_word_idx, start, end)].
+
+    Real speech timings (faster-whisper) preferred; falls back to the
+    estimated even-division timings from the SRT. Also drives BGM ducking.
+    """
+    caption_events = []
+    try:
+        real_words = []
+        if word_timings_path:
+            try:
+                from .captions import load_word_timings
+                real_words = load_word_timings(word_timings_path)
+            except Exception as wt_err:
+                print(f"[video_assembler] Word-timing load note: {wt_err}")
+
+        if real_words:
+            from .captions import chunk_words
+            for chunk in chunk_words(real_words):
+                for w_idx, (_w, w_start, w_end) in enumerate(chunk["timings"]):
+                    caption_events.append((chunk["words"], w_idx, w_start, w_end))
+            print(f"[video_assembler] Karaoke synced to {len(real_words)} real word timings.")
+        else:
+            subs = parse_srt(subtitle_path)
+            for sub in subs:
+                raw = sub['text'].strip()
+                if not raw:
+                    continue
+                words = raw.split()
+                seg_start, seg_end = sub['start'], sub['end']
+                seg_dur = max(0.25, seg_end - seg_start)
+                word_dur = seg_dur / max(1, len(words))
+                for w_idx in range(len(words)):
+                    w_start = seg_start + w_idx * word_dur
+                    w_end = seg_start + (w_idx + 1) * word_dur if w_idx < len(words) - 1 else seg_end
+                    caption_events.append((words, w_idx, w_start, w_end))
+    except Exception as e:
+        print(f"[video_assembler] Caption event build note: {e}")
+    return caption_events
+
+
+def _build_ducked_bgm(music_path, total_duration, speech_intervals,
+                      duck_vol=0.08, gap_vol=0.22):
+    """Background music that DUCKS under speech.
+
+    The track is tiled to cover the whole video, then split at speech
+    boundaries: quiet (duck_vol) while the narrator talks, louder
+    (gap_vol) in the gaps. speech_intervals = [(start, end), ...].
+    Returns an AudioClip or None.
+    """
+    from moviepy import AudioFileClip, concatenate_audioclips
+    music = AudioFileClip(music_path)
+    m_dur = getattr(music, "duration", 0) or 0
+    if m_dur <= 0:
+        return None
+    # Tile the track so it covers the whole video.
+    tiles, covered = [music], m_dur
+    while covered < total_duration:
+        tiles.append(music)
+        covered += m_dur
+    looped = (concatenate_audioclips(tiles) if len(tiles) > 1
+              else tiles[0]).subclipped(0, total_duration)
+    # Merge overlapping speech intervals.
+    merged = []
+    for s, e in sorted(speech_intervals):
+        s = max(0.0, min(s, total_duration))
+        e = max(0.0, min(e, total_duration))
+        if e <= s:
+            continue
+        if merged and s <= merged[-1][1] + 0.10:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    if not merged:
+        return looped.with_volume_scaled(gap_vol)
+    segs = []
+    t = 0.0
+    for s, e in merged:
+        if s > t + 0.05:
+            segs.append(looped.subclipped(t, s).with_volume_scaled(gap_vol)
+                        .audio_fadein(0.15).audio_fadeout(0.15))
+        segs.append(looped.subclipped(max(t, s), e).with_volume_scaled(duck_vol)
+                    .audio_fadein(0.15).audio_fadeout(0.15))
+        t = e
+    if t < total_duration - 0.05:
+        segs.append(looped.subclipped(t, total_duration).with_volume_scaled(gap_vol)
+                    .audio_fadein(0.15).audio_fadeout(0.15))
+    return concatenate_audioclips(segs) if len(segs) > 1 else segs[0]
+
+
 def assemble_cinematic_video(
     audio_path: str,
     subtitle_path: str,
@@ -560,9 +660,24 @@ def assemble_cinematic_video(
         img_paths = scene.get('image_paths', [])
         
         if video_paths:
+            # ── Dead-video guard (user report 2026-09-27: "rest was just black
+            # screen"). A missing/corrupt AI video must NEVER become a black
+            # ColorClip — drop dead files and let the scene fall back to its
+            # images (motion stills) below.
+            live = [vp for vp in video_paths
+                    if vp and os.path.exists(vp) and os.path.getsize(vp) > 1000]
+            dropped = len(video_paths) - len(live)
+            if dropped:
+                print(f"[video_assembler] Scene {idx+1}: dropped {dropped} dead "
+                      f"video file(s); falling back to images (no black screen).")
+            video_paths = live
+
+        if video_paths:
             shot_duration = scene_dur / len(video_paths)
+            fb_img = (img_paths or [None])[0]
             for shot_idx, video_path in enumerate(video_paths):
-                vc = prepare_video_shot(video_path, shot_duration, 1080, 1920)
+                vc = prepare_video_shot(video_path, shot_duration, 1080, 1920,
+                                        fallback_image=fb_img)
                 video_clips.append(vc)
                 if shot_idx > 0 or idx > 0:
                     boundary_times.append(current_time)
@@ -617,7 +732,13 @@ def assemble_cinematic_video(
     creative_brain = get_creative_brain()
     mix_levels = creative_brain.get_audio_mix()
     tracks = [audio_clip.with_volume_scaled(mix_levels["voice"])]
-    
+
+    # Word timings first: speech intervals drive BGM ducking (music drops
+    # low UNDER the narration, rises in the gaps). Built once, reused by
+    # the karaoke captions in section 4.
+    caption_events = _build_caption_events(word_timings_path, subtitle_path)
+    speech_intervals = [(s, e) for (_w, _i, s, e) in caption_events]
+
     # Auto-resolve emotion-matched background music if not explicitly provided
     if not music_path or not os.path.exists(music_path):
         try:
@@ -631,11 +752,13 @@ def assemble_cinematic_video(
                 print(f"[video_assembler] Auto-synced BGM for emotion '{emotion}' -> '{mood}': {music_path}")
         except Exception as bgm_err:
             print(f"[video_assembler] BGM auto-selection note: {bgm_err}")
-            
+
     if music_path and os.path.exists(music_path):
         try:
-            bgm = AudioFileClip(music_path).with_duration(total_duration)
-            tracks.append(bgm.with_volume_scaled(0.16))
+            ducked = _build_ducked_bgm(music_path, total_duration, speech_intervals)
+            if ducked is not None:
+                tracks.append(ducked)
+                print(f"[video_assembler] BGM ducked under {len(speech_intervals)} speech event(s).")
         except Exception as e:
             print(f"[video_assembler] Error mixing BGM: {e}")
             
@@ -669,41 +792,10 @@ def assemble_cinematic_video(
     final_video = final_video.with_audio(mixed_audio)
 
     # 4. Word-by-Word Bouncing Karaoke Subtitles (Alex Hormozi / CapCut Style at Safe-Zone y=1120)
-    # Real speech timings (faster-whisper) are preferred; falls back to the
-    # estimated even-division timings from the SRT when unavailable.
-    # Each event: (words_list, active_word_index, start, end)
-    caption_events = []
-    try:
-        real_words = []
-        if word_timings_path:
-            try:
-                from .captions import load_word_timings
-                real_words = load_word_timings(word_timings_path)
-            except Exception as wt_err:
-                print(f"[video_assembler] Word-timing load note: {wt_err}")
-
-        if real_words:
-            from .captions import chunk_words
-            for chunk in chunk_words(real_words):
-                for w_idx, (_w, w_start, w_end) in enumerate(chunk["timings"]):
-                    caption_events.append((chunk["words"], w_idx, w_start, w_end))
-            print(f"[video_assembler] Karaoke synced to {len(real_words)} real word timings.")
-        else:
-            subs = parse_srt(subtitle_path)
-            for sub in subs:
-                raw = sub['text'].strip()
-                if not raw:
-                    continue
-                words = raw.split()
-                seg_start, seg_end = sub['start'], sub['end']
-                seg_dur = max(0.25, seg_end - seg_start)
-                word_dur = seg_dur / max(1, len(words))
-                for w_idx in range(len(words)):
-                    w_start = seg_start + w_idx * word_dur
-                    w_end = seg_start + (w_idx + 1) * word_dur if w_idx < len(words) - 1 else seg_end
-                    caption_events.append((words, w_idx, w_start, w_end))
-    except Exception as e:
-        print(f"[video_assembler] Caption event build note: {e}")
+    # caption_events was already built in section 3 (it also drives BGM
+    # ducking); rebuild only if something cleared it.
+    if not caption_events:
+        caption_events = _build_caption_events(word_timings_path, subtitle_path)
 
     overlay_clips = []
     # Karaoke captions are built as an ASS file and burned with ffmpeg's
