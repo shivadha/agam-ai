@@ -315,3 +315,181 @@ def mix_music(video_path: str, music_path: str, out_path: str,
     if proc.returncode != 0 or not os.path.exists(out_path):
         raise RuntimeError(f"music mix failed: {(proc.stderr or '')[-600:]}")
     return out_path
+
+
+def make_thumb(video_path: str, out_path: str, t: float = None) -> str:
+    """Grab a 320px-wide JPEG thumbnail (mid-frame by default)."""
+    dur = probe_duration(video_path)
+    if t is None:
+        t = max(0.0, dur / 2.0)
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    proc = subprocess.run(
+        [_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error",
+         "-ss", str(t), "-i", video_path, "-frames:v", "1",
+         "-vf", "scale=320:-1", "-q:v", "5", out_path],
+        capture_output=True, timeout=60)
+    if proc.returncode != 0 or not os.path.exists(out_path):
+        raise RuntimeError(f"thumbnail failed: {(proc.stderr or '')[-300:]}")
+    return out_path
+
+
+def clone_short_as_is(reference_url: str, video_path: str,
+                      progress_cb=None) -> dict:
+    """Clone a reference Short's SCRIPT + TEMPLATE + EDITING STYLE.
+
+    Pipeline:
+      1. download the reference short
+      2. analyze_short() -> pacing (cuts/min), per-shot camera motion,
+         caption zone/size, WPM, word-timed transcript (the "script")
+      3. proportionally map the reference EDL onto the user's footage
+         (shot durations, per-shot motion, caption cadence)
+      4. render each mapped shot with clipper.make_clip(style_profile=...)
+         -- captions come from the USER's own transcription, timed to the
+         reference's caption cadence
+      5. concat the shots, save the style + clip rows
+
+    NOTE: the reference's music track can't be lifted (it's baked into the
+    download), so a music bed is NOT copied -- only structure, motion,
+    pacing, and caption style.
+
+    video_path may be absolute or relative to OUTPUT_DIR. Returns a dict
+    with file/style_id/clip_id/profile. Raises on failure.
+    """
+    from src.backend import style_analyzer, clipper
+    from src import database as db
+
+    def _prog(msg):
+        if progress_cb:
+            try:
+                progress_cb(msg)
+            except Exception:
+                pass
+
+    if not is_youtube_url(reference_url):
+        raise ValueError("not a YouTube URL")
+    if not os.path.isabs(video_path):
+        video_path = os.path.join(OUTPUT_DIR, video_path)
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"video not found: {video_path}")
+
+    stamp = __import__("time").strftime("%Y%m%d_%H%M%S")
+    work_dir = os.path.join(STUDIO_DIR, "clones", stamp)
+    os.makedirs(work_dir, exist_ok=True)
+
+    _prog("downloading reference short")
+    ref_info = download_youtube(reference_url.strip(), out_dir=work_dir)
+    ref_path = os.path.join(OUTPUT_DIR, ref_info["file"])
+    ref_title = ref_info.get("title") or "reference short"
+
+    _prog("analyzing reference style")
+    profile = style_analyzer.analyze_short(
+        ref_path, work_dir=work_dir, progress_cb=_prog)
+
+    ref_dur = float(profile.get("duration_s") or probe_duration(ref_path))
+    user_dur = probe_duration(video_path)
+    if user_dur <= 0:
+        raise ValueError("user video has no measurable duration")
+    if ref_dur <= 0:
+        raise ValueError("reference video has no measurable duration")
+
+    _prog("transcribing your footage")
+    try:
+        from src.backend.captions import transcribe_word_timings
+        user_words = transcribe_word_timings(video_path) or []
+    except Exception:
+        user_words = []
+
+    _prog("mapping reference edit plan onto your footage")
+    edl = style_analyzer.map_edl_to_duration(
+        profile.get("edl") or [], ref_dur, user_dur)
+    if not edl:  # analysis failed: fall back to one full-length segment
+        edl = [{"shot": 1, "start": 0.0, "end": user_dur,
+                "duration": user_dur, "motion": "static",
+                "zoom_intensity": 0.0, "word_count": 0, "text": ""}]
+
+    segments = []
+    try:
+        for i, shot in enumerate(edl):
+            _prog(f"rendering shot {i + 1}/{len(edl)}")
+            a, b = shot["start"], shot["end"]
+            if b - a < 0.4:
+                continue
+            sp = {
+                "captions": profile.get("captions") or {},
+                "words_per_caption": max(
+                    1, min(6, int(shot.get("word_count")
+                                   or profile.get("words_per_caption") or 3))),
+                "motion": shot.get("motion") or "static",
+                "zoom_intensity": shot.get("zoom_intensity") or 0.0,
+            }
+            seg_path = os.path.join(work_dir, f"seg_{i:03d}.mp4")
+            clipper.make_clip(video_path, a, b, seg_path,
+                              style_profile=sp, require_speech=False)
+            segments.append(seg_path)
+
+        if not segments:
+            raise RuntimeError("no clone segments could be rendered")
+
+        _prog("assembling final clone")
+        list_path = os.path.join(work_dir, "concat.txt")
+        with open(list_path, "w", encoding="utf-8") as f:
+            for s in segments:
+                f.write("file '%s'\n" % s.replace("'", "'\\''"))
+        out_name = "clone_%s.mp4" % stamp
+        out_abs = os.path.join(work_dir, out_name)
+        proc = subprocess.run(
+            [_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error",
+             "-f", "concat", "-safe", "0", "-i", list_path,
+             "-c", "copy", "-movflags", "+faststart", out_abs],
+            capture_output=True, timeout=1800)
+        if proc.returncode != 0 or not os.path.exists(out_abs):
+            raise RuntimeError(
+                f"clone concat failed: {(proc.stderr or '')[-600:]}")
+    finally:
+        for s in segments:
+            try:
+                os.remove(s)
+            except OSError:
+                pass
+
+    rel_out = os.path.relpath(out_abs, OUTPUT_DIR).replace("\\", "/")
+    thumb_rel = ""
+    try:
+        thumb_abs = os.path.join(work_dir, "clone_thumb.jpg")
+        make_thumb(out_abs, thumb_abs)
+        thumb_rel = os.path.relpath(thumb_abs, OUTPUT_DIR).replace("\\", "/")
+    except Exception:
+        pass
+
+    _prog("saving to your library")
+    db.init_db()
+    style_thumb = (profile.get("thumb_paths") or [""])[0]
+    style_id = db.save_clip_style(
+        name=f"Clone of {ref_title[:60]}",
+        source_url=reference_url.strip(),
+        profile=profile,
+        thumb_path=style_thumb)
+    clip_id = db.record_clip(
+        source_video=os.path.relpath(video_path, OUTPUT_DIR).replace("\\", "/"),
+        source_url=reference_url.strip(),
+        start_s=0.0, end_s=round(user_dur, 2),
+        style_id=style_id, output_path=rel_out, thumb_path=thumb_rel,
+        kind="clone",
+        meta={"ref_title": ref_title,
+              "ref_duration_s": round(ref_dur, 2),
+              "shots": len(edl),
+              "user_words": len(user_words)})
+
+    _prog("done")
+    return {
+        "file": rel_out,
+        "thumb": thumb_rel,
+        "title": f"Clone of {ref_title[:60]}",
+        "style_id": style_id,
+        "clip_id": clip_id,
+        "shots": len(edl),
+        "ref_duration_s": round(ref_dur, 2),
+        "user_duration_s": round(user_dur, 2),
+        "cuts_per_min": (profile.get("pacing") or {}).get("cuts_per_min", 0),
+        "caption_zone": (profile.get("captions") or {}).get("zone"),
+    }

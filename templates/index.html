@@ -273,6 +273,18 @@
                         <span class="clip-step-num">4</span>
                         <div><strong>Random clips</strong><p>Auto-cut captioned clips, ready to post.</p></div>
                     </div>
+                    <div class="clip-step" data-step="5">
+                        <span class="clip-step-num">5</span>
+                        <div><strong>Style Lab</strong><p>Copy any viral short's editing style, reuse it forever.</p></div>
+                    </div>
+                    <div class="clip-step" data-step="6">
+                        <span class="clip-step-num">6</span>
+                        <div><strong>Clone as-is</strong><p>Rebuild a reference short's script + template on your footage.</p></div>
+                    </div>
+                    <div class="clip-step" data-step="7">
+                        <span class="clip-step-num">7</span>
+                        <div><strong>My clips</strong><p>Every clip you ever cut, in one library.</p></div>
+                    </div>
                 </div>
             </div>
 
@@ -324,6 +336,7 @@
                     <input id="clipStartInput" class="clip-num" type="number" min="0" step="0.5" value="0" title="Clip start (seconds)" />
                     <button class="sort-btn" id="setClipEndBtn" title="Use current playback position">⤴ Set end</button>
                     <input id="clipEndInput" class="clip-num" type="number" min="1" step="0.5" value="30" title="Clip end (seconds)" />
+                    <label class="clip-label" title="Apply a saved viral style">Style <select id="trimStyleSelect" class="clip-input"><option value="">— default look —</option></select></label>
                     <button class="btn-refresh" id="cutTrimBtn">✂️ Cut this clip</button>
                 </div>
                 <div class="clip-status" id="trimStatus"></div>
@@ -348,10 +361,46 @@
                     <label class="clip-label">Clips <input id="numClipsInput" class="clip-num" type="number" value="3" min="1" max="10" /></label>
                     <label class="clip-label">Min sec <input id="minSecInput" class="clip-num" type="number" value="15" min="3" max="120" /></label>
                     <label class="clip-label">Max sec <input id="maxSecInput" class="clip-num" type="number" value="45" min="5" max="170" /></label>
+                    <label class="clip-label">Style <select id="randomStyleSelect" class="clip-input"><option value="">— default look —</option></select></label>
                     <button class="btn-refresh" id="randomClipBtn"><span class="icon-spin-target">🎲</span> Random Clip</button>
                 </div>
                 <div class="clip-status" id="randomClipStatus"></div>
                 <div id="randomClipGrid" class="clip-video-grid"></div>
+            </div>
+
+            <div class="clip-card" id="clipStep5Card">
+                <h3 class="clip-card-title">5️⃣ 🎨 Style Lab — copy any viral short's style</h3>
+                <p class="clip-muted" style="margin:0 0 0.7rem">Paste ANY YouTube Short URL. We download it and learn its editing style — cut pacing, camera motion, caption zone/size, speech speed — so you can stamp that style onto your own clips.</p>
+                <div class="clip-row">
+                    <input id="styleUrlInput" class="clip-input" type="url"
+                           placeholder="Paste a viral Short URL (any length)…" autocomplete="off" />
+                    <button class="btn-refresh" id="analyzeStyleBtn"><span class="icon-spin-target">🔍</span> Analyze style</button>
+                </div>
+                <div class="clip-status" id="styleAnalyzeStatus"></div>
+                <div id="styleResultCard" class="clip-style-result hidden"></div>
+                <h4 class="clip-sub">Style library</h4>
+                <div id="styleLibraryGrid" class="clip-video-grid"><div class="clip-muted">No saved styles yet — analyze one above.</div></div>
+            </div>
+
+            <div class="clip-card" id="clipStep6Card">
+                <h3 class="clip-card-title">6️⃣ 🧬 Clone as-is</h3>
+                <p class="clip-muted" style="margin:0 0 0.7rem">Reproduces the reference short's <strong>script + template + editing style</strong> on the video you picked in step 1: same shot lengths, same camera moves, same caption placement — with <strong>your own footage and your own words</strong>. (The reference's music isn't copied.)</p>
+                <div class="clip-row">
+                    <input id="cloneRefUrlInput" class="clip-input" type="url"
+                           placeholder="Paste the reference Short URL to clone…" autocomplete="off" />
+                    <button class="btn-refresh" id="cloneShortBtn"><span class="icon-spin-target">🧬</span> Clone as-is</button>
+                </div>
+                <div class="clip-status" id="cloneStatus"></div>
+                <div id="cloneResultGrid" class="clip-video-grid"></div>
+            </div>
+
+            <div class="clip-card" id="clipStep7Card">
+                <h3 class="clip-card-title">7️⃣ 📚 My clips</h3>
+                <p class="clip-muted" style="margin:0 0 0.7rem">Every clip you cut, music mix, or clone — saved automatically.</p>
+                <div class="clip-row">
+                    <button class="sort-btn" id="refreshClipsBtn">↻ Refresh library</button>
+                </div>
+                <div id="myClipsGrid" class="clip-video-grid"><div class="clip-muted">Loading…</div></div>
             </div>
         </section>
     </main>

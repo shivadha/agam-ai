@@ -988,27 +988,58 @@ def api_studio_random_clips():
                 fixed = None
     except (TypeError, ValueError):
         fixed = None
+    # Optional Style Lab profile: apply a saved viral-short style to the clips.
+    style_id = data.get('style_id')
+    music_sound_id = data.get('music_sound_id')
+    style_profile = _studio_style_profile(style_id)
     job_id = _studio_job_start("studio-clips")
 
     def _run():
         try:
+            from src.backend.clipper import make_clip as _make_clip
             duration = studio.probe_duration(vpath)
             if not duration:
                 raise RuntimeError("could not read video duration")
+            sp = dict(style_profile) if style_profile else None
+            if sp and (sp.get("audio") or {}).get("music_bed") and music_sound_id:
+                try:
+                    snd = studio.resolve_sound_path(int(music_sound_id))
+                    sp["music_path"] = snd["path"]
+                    sp["music_volume"] = max(
+                        0.0, min(0.8, float(data.get('volume') or 0.25)))
+                except Exception as e:
+                    print(f"[studio] style music resolve failed: {e}")
+
+            def _clip_fn(vp, s, e, op):
+                return _make_clip(vp, s, e, op, style_profile=sp)
+
             out_dir = os.path.join(OUTPUT_DIR, "studio", f"clips_{job_id}")
             if fixed:
                 start, end = fixed
                 if end > duration:
                     raise ValueError(
                         f"clip end {end:.1f}s is past the video duration {duration:.1f}s")
-                one = studio.render_single_clip(vpath, start, end, out_dir)
+                one = studio.render_single_clip(vpath, start, end, out_dir,
+                                                clip_fn=_clip_fn)
                 one["play_url"] = f"/output/{one['file']}"
+                _studio_record_clip(vpath, start, end,
+                                    sp.get("style_id") if sp else None,
+                                    one["file"], kind="cut",
+                                    meta={"style_name": sp.get("style_name")
+                                          if sp else ""})
                 res = {"clips": [one], "skipped": 0}
             else:
                 res = studio.render_random_clips(vpath, duration, num, lo, hi,
-                                                 out_dir, seed=seed)
+                                                 out_dir, seed=seed,
+                                                 clip_fn=_clip_fn)
                 for c in res["clips"]:
                     c["play_url"] = f"/output/{c['file']}"
+                    _studio_record_clip(
+                        vpath, c.get("start_sec"), c.get("end_sec"),
+                        sp.get("style_id") if sp else None,
+                        c["file"], kind="random",
+                        meta={"style_name": sp.get("style_name") if sp else ""})
+            res["style_id"] = sp.get("style_id") if sp else None
             _studio_job_set(job_id, "done", result=res)
         except Exception as e:
             _studio_job_set(job_id, "error", error=str(e))
@@ -1051,6 +1082,10 @@ def api_studio_add_music():
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             studio.mix_music(vpath, snd["path"], out_path, volume=volume)
             rel = os.path.relpath(out_path, OUTPUT_DIR).replace("\\", "/")
+            _studio_record_clip(vpath, 0.0, studio.probe_duration(vpath),
+                                None, rel, kind="music",
+                                meta={"music": snd["name"], "volume": volume,
+                                      "sound_id": sound_id})
             _studio_job_set(job_id, "done", result={
                 "file": rel, "play_url": f"/output/{rel}",
                 "music": snd["name"], "volume": volume,
@@ -1069,6 +1104,252 @@ def api_studio_music_status(job_id):
     if not job:
         return jsonify({"status": "error", "message": "Unknown job id."}), 404
     return jsonify({"status": "success", "job": job})
+
+
+# ── Style Lab: analyze a viral short, save/reuse its editing style ──────────
+def _studio_style_profile(style_id):
+    """Load a saved style row as a make_clip-ready profile dict (or None)."""
+    if not style_id:
+        return None
+    try:
+        row = database.get_clip_style(int(style_id))
+    except (TypeError, ValueError):
+        return None
+    if not row:
+        return None
+    try:
+        profile = json.loads(row.get("profile_json") or "{}")
+    except Exception:
+        profile = {}
+    profile["style_id"] = row["id"]
+    profile["style_name"] = row["name"]
+    profile.pop("local_path", None)  # server-local, useless to the clipper
+    return profile
+
+
+def _studio_record_clip(vpath, start_s, end_s, style_id, rel_file,
+                        kind="cut", meta=None, source_url=""):
+    """Persist a rendered clip to the clips table (+ thumbnail)."""
+    try:
+        thumb_rel = ""
+        abs_file = os.path.join(OUTPUT_DIR, rel_file)
+        if os.path.exists(abs_file):
+            from src.backend import studio as _st
+            thumb_abs = os.path.splitext(abs_file)[0] + "_thumb.jpg"
+            _st.make_thumb(abs_file, thumb_abs)
+            thumb_rel = os.path.relpath(thumb_abs, OUTPUT_DIR).replace("\\", "/")
+        return database.record_clip(
+            source_video=os.path.relpath(vpath, OUTPUT_DIR).replace("\\", "/")
+            if vpath and os.path.isabs(vpath) else (vpath or ""),
+            source_url=source_url or "",
+            start_s=start_s, end_s=end_s, style_id=style_id,
+            output_path=rel_file, thumb_path=thumb_rel,
+            kind=kind, meta=meta or {})
+    except Exception as e:
+        print(f"[studio] clip DB record failed: {e}")
+        return None
+
+
+@app.route('/api/studio/analyze-style', methods=['POST'])
+@login_required
+def api_studio_analyze_style():
+    """Analyze a YouTube Short's editing style (background job)."""
+    from src.backend import studio
+    data = request.get_json() or {}
+    url = (data.get('url') or '').strip()
+    if not studio.is_youtube_url(url):
+        return jsonify({"status": "error",
+                        "message": "Paste a YouTube watch/Shorts URL."}), 400
+    job_id = _studio_job_start("studio-style")
+
+    def _run():
+        try:
+            from src.backend import style_analyzer
+            msgs = []
+
+            def _prog(m):
+                msgs.append(m)
+                _studio_job_set(job_id, "running",
+                                result={"progress": m, "log": msgs})
+            work_dir = os.path.join(OUTPUT_DIR, "studio", "style_refs", job_id)
+            profile = style_analyzer.analyze_short(
+                url, work_dir=work_dir, progress_cb=_prog)
+            profile.pop("local_path", None)
+            profile["thumbs"] = [f"/output/{t}" for t in
+                                 profile.pop("thumb_paths", [])]
+            # Keep the transcript but cap it for the response payload.
+            if len(profile.get("transcript") or []) > 400:
+                profile["transcript"] = profile["transcript"][:400]
+            _studio_job_set(job_id, "done", result={
+                "profile": profile, "source_url": url, "log": msgs})
+        except Exception as e:
+            _studio_job_set(job_id, "error", error=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "queued", "job_id": job_id})
+
+
+@app.route('/api/studio/style-status/<job_id>')
+@login_required
+def api_studio_style_status(job_id):
+    job = _studio_job_get(job_id)
+    if not job:
+        return jsonify({"status": "error", "message": "Unknown job id."}), 404
+    return jsonify({"status": "success", "job": job})
+
+
+@app.route('/api/studio/styles', methods=['GET'])
+@login_required
+def api_studio_styles_list():
+    """List saved style profiles (library)."""
+    rows = database.list_clip_styles()
+    out = []
+    for r in rows:
+        try:
+            prof = json.loads(r.get("profile_json") or "{}")
+        except Exception:
+            prof = {}
+        out.append({
+            "id": r["id"], "name": r["name"],
+            "source_url": r.get("source_url") or "",
+            "created_at": r.get("created_at") or "",
+            "thumb_url": (f"/output/{r['thumb_path']}" if r.get("thumb_path")
+                          else ((f"/output/{prof['thumb_paths'][0]}")
+                                if prof.get("thumb_paths") else "")),
+            "cuts_per_min": (prof.get("pacing") or {}).get("cuts_per_min", 0),
+            "caption_zone": (prof.get("captions") or {}).get("zone"),
+            "dominant_motion": (prof.get("motion") or {}).get("dominant"),
+            "duration_s": prof.get("duration_s", 0),
+            "wpm": (prof.get("audio") or {}).get("wpm", 0),
+        })
+    return jsonify({"status": "success", "styles": out})
+
+
+@app.route('/api/studio/styles', methods=['POST'])
+@login_required
+def api_studio_styles_save():
+    """Save an analyzed profile: {name, source_url, profile}."""
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()[:80]
+    profile = data.get('profile') or {}
+    if not name:
+        return jsonify({"status": "error",
+                        "message": "Give the style a name."}), 400
+    if not isinstance(profile, dict) or not profile.get("duration_s"):
+        return jsonify({"status": "error",
+                        "message": "No valid analyzed profile to save."}), 400
+    thumb = ""
+    thumbs = profile.get("thumbs") or []
+    if thumbs:
+        thumb = thumbs[0].replace("/output/", "", 1)
+    sid = database.save_clip_style(
+        name, source_url=(data.get('source_url') or '')[:500],
+        profile=profile, thumb_path=thumb)
+    return jsonify({"status": "success", "style_id": sid})
+
+
+@app.route('/api/studio/styles/<int:style_id>', methods=['DELETE'])
+@login_required
+def api_studio_styles_delete(style_id):
+    ok = database.delete_clip_style(style_id)
+    if not ok:
+        return jsonify({"status": "error",
+                        "message": "Style not found."}), 404
+    return jsonify({"status": "success", "deleted": style_id})
+
+
+@app.route('/api/studio/clone-short', methods=['POST'])
+@login_required
+def api_studio_clone_short():
+    """Clone a reference Short's script+template+editing style (background)."""
+    from src.backend import studio
+    data = request.get_json() or {}
+    ref_url = (data.get('reference_url') or '').strip()
+    if not studio.is_youtube_url(ref_url):
+        return jsonify({"status": "error",
+                        "message": "Paste a YouTube watch/Shorts URL."}), 400
+    vpath = _studio_abspath(data.get('video_file'))
+    if not vpath:
+        return jsonify({"status": "error",
+                        "message": "Provide a valid 'video_file' from /api/studio/videos."}), 400
+    job_id = _studio_job_start("studio-clone")
+
+    def _run():
+        try:
+            msgs = []
+
+            def _prog(m):
+                msgs.append(m)
+                _studio_job_set(job_id, "running",
+                                result={"progress": m, "log": msgs})
+            res = studio.clone_short_as_is(ref_url, vpath, progress_cb=_prog)
+            res["play_url"] = f"/output/{res['file']}"
+            res["thumb_url"] = (f"/output/{res['thumb']}" if res.get("thumb")
+                                else "")
+            res["log"] = msgs
+            _studio_job_set(job_id, "done", result=res)
+        except Exception as e:
+            _studio_job_set(job_id, "error", error=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "queued", "job_id": job_id})
+
+
+@app.route('/api/studio/clone-status/<job_id>')
+@login_required
+def api_studio_clone_status(job_id):
+    job = _studio_job_get(job_id)
+    if not job:
+        return jsonify({"status": "error", "message": "Unknown job id."}), 404
+    return jsonify({"status": "success", "job": job})
+
+
+@app.route('/api/studio/clips', methods=['GET'])
+@login_required
+def api_studio_clips_list():
+    """The user's permanent clip library, newest first."""
+    rows = database.list_clips(limit=int(request.args.get('limit') or 100))
+    out = []
+    for r in rows:
+        out.append({
+            "id": r["id"], "created_at": r.get("created_at") or "",
+            "kind": r.get("kind") or "cut",
+            "source_video": r.get("source_video") or "",
+            "start_s": r.get("start_s"), "end_s": r.get("end_s"),
+            "style_id": r.get("style_id"),
+            "style_name": r.get("style_name") or "",
+            "play_url": (f"/output/{r['output_path']}" if r.get("output_path")
+                         else ""),
+            "thumb_url": (f"/output/{r['thumb_path']}" if r.get("thumb_path")
+                          else ""),
+            "duration_s": (round(r["end_s"] - r["start_s"], 1)
+                           if r.get("start_s") is not None
+                           and r.get("end_s") is not None else None),
+        })
+    return jsonify({"status": "success", "clips": out})
+
+
+@app.route('/api/studio/clips/<int:clip_id>', methods=['DELETE'])
+@login_required
+def api_studio_clips_delete(clip_id):
+    row = database.delete_clip(clip_id)
+    if not row:
+        return jsonify({"status": "error",
+                        "message": "Clip not found."}), 404
+    # Remove the files too (recoverable trash is for user files; these are
+    # regenerable renders, so plain delete is fine).
+    for key in ("output_path", "thumb_path"):
+        rel = (row.get(key) or "").replace("\\", "/").lstrip("/")
+        if rel and not rel.startswith("..") and "/../" not in rel:
+            full = os.path.normpath(os.path.join(OUTPUT_DIR, rel))
+            if full.startswith(os.path.abspath(OUTPUT_DIR) + os.sep) \
+                    and os.path.exists(full):
+                try:
+                    os.remove(full)
+                except OSError:
+                    pass
+    # Clean up the per-render ASS sidecar if it somehow survived.
+    return jsonify({"status": "success", "deleted": clip_id})
 
 
 # ── System self-check: ensure everything a workflow needs is installed/running ──

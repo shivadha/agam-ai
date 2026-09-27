@@ -194,6 +194,35 @@ def init_db():
                 created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_node_logs_run ON node_logs(run_id, created_at);
+
+            -- Clip Studio: Style Lab + clip library --------------------------
+            -- clip_styles: saved viral-short style profiles (pacing, motion,
+            -- caption zone, audio) learned via analyze_short().
+            -- clips: every clip ever rendered by Clip Studio, so the user's
+            -- library is permanent and searchable.
+            CREATE TABLE IF NOT EXISTS clip_styles (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT NOT NULL,
+                source_url   TEXT,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                profile_json TEXT NOT NULL DEFAULT '{}',
+                thumb_path   TEXT
+            );
+            CREATE TABLE IF NOT EXISTS clips (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                source_video TEXT,
+                source_url   TEXT,
+                start_s      REAL,
+                end_s        REAL,
+                style_id     INTEGER REFERENCES clip_styles(id) ON DELETE SET NULL,
+                output_path  TEXT,
+                thumb_path   TEXT,
+                kind         TEXT NOT NULL DEFAULT 'cut',
+                meta_json    TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_clips_created ON clips(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_clips_kind ON clips(kind);
         ''')
 
         # Auto-migration: ensure image_url exists on legacy tables
@@ -611,3 +640,123 @@ def get_workflow_runs(limit: int = 30) -> list:
         finally:
             conn.close()
     return [dict(r) for r in rows]
+
+
+# ── Clip Studio: Style Lab + clip library ───────────────────────────────────
+def save_clip_style(name: str, source_url: str = "", profile: dict = None,
+                    thumb_path: str = "") -> int:
+    """Save a style profile. Returns the new style id."""
+    import json as _json
+    with _db_lock:
+        conn = get_db()
+        try:
+            cur = conn.execute(
+                "INSERT INTO clip_styles (name, source_url, profile_json, thumb_path)"
+                " VALUES (?, ?, ?, ?)",
+                (name, source_url or "",
+                 _json.dumps(profile or {}), thumb_path or ""))
+            conn.commit()
+            return cur.lastrowid
+        finally:
+            conn.close()
+
+
+def list_clip_styles() -> list:
+    with _db_lock:
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT id, name, source_url, created_at, profile_json, thumb_path"
+                " FROM clip_styles ORDER BY created_at DESC").fetchall()
+        finally:
+            conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_clip_style(style_id: int):
+    with _db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT id, name, source_url, created_at, profile_json, thumb_path"
+                " FROM clip_styles WHERE id = ?", (style_id,)).fetchone()
+        finally:
+            conn.close()
+    return dict(row) if row else None
+
+
+def delete_clip_style(style_id: int) -> bool:
+    """Delete a style. Referencing clips keep their rows (style_id -> NULL)."""
+    with _db_lock:
+        conn = get_db()
+        try:
+            cur = conn.execute("DELETE FROM clip_styles WHERE id = ?", (style_id,))
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
+
+def record_clip(source_video: str = "", source_url: str = "",
+                start_s: float = None, end_s: float = None,
+                style_id: int = None, output_path: str = "",
+                thumb_path: str = "", kind: str = "cut",
+                meta: dict = None) -> int:
+    """Record one rendered clip. Returns the new clip id."""
+    import json as _json
+    with _db_lock:
+        conn = get_db()
+        try:
+            cur = conn.execute(
+                "INSERT INTO clips (source_video, source_url, start_s, end_s,"
+                " style_id, output_path, thumb_path, kind, meta_json)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (source_video or "", source_url or "", start_s, end_s,
+                 style_id, output_path or "", thumb_path or "",
+                 kind or "cut", _json.dumps(meta or {})))
+            conn.commit()
+            return cur.lastrowid
+        finally:
+            conn.close()
+
+
+def list_clips(limit: int = 100) -> list:
+    """Newest first, with the style name (if any) joined in."""
+    with _db_lock:
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT c.*, s.name AS style_name FROM clips c"
+                " LEFT JOIN clip_styles s ON s.id = c.style_id"
+                " ORDER BY c.created_at DESC, c.id DESC LIMIT ?",
+                (limit,)).fetchall()
+        finally:
+            conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_clip(clip_id: int):
+    with _db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+        finally:
+            conn.close()
+    return dict(row) if row else None
+
+
+def delete_clip(clip_id: int):
+    """Delete a clip row. Returns the deleted row (for file cleanup) or None."""
+    with _db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+            if not row:
+                return None
+            conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
+            conn.commit()
+            return dict(row)
+        finally:
+            conn.close()

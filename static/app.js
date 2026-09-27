@@ -877,6 +877,9 @@ const clipStudio = {
     videoTitle: '',
     soundId: null,
     pollTimer: null,
+    styles: [],           // saved Style Lab profiles
+    lastAnalyzed: null,   // {profile, source_url} awaiting save
+    myClips: [],
 };
 
 function fmtTime(sec) {
@@ -911,6 +914,9 @@ async function pollStudioJob(statusUrl, jobId, onDone, statusElId, label) {
             } else if (job.status === 'error') {
                 clearInterval(clipStudio.pollTimer);
                 onDone(job.error || 'Job failed.');
+            } else if (job.status === 'running' && job.result && job.result.progress) {
+                // long jobs (style analysis, clone) stream progress messages
+                setClipStatus(statusElId, job.result.progress + '…');
             }
         } catch (e) {
             clearInterval(clipStudio.pollTimer);
@@ -1037,6 +1043,183 @@ function renderClipCards(gridId, clips) {
     });
 }
 
+/* ── Style Lab ── */
+
+async function loadStyleLibrary() {
+    try {
+        const r = await fetch('/api/studio/styles');
+        const d = await r.json();
+        clipStudio.styles = d.styles || [];
+    } catch (e) {
+        clipStudio.styles = [];
+    }
+    fillStyleSelects();
+    renderStyleLibrary();
+}
+
+function fillStyleSelects() {
+    ['trimStyleSelect', 'randomStyleSelect'].forEach(id => {
+        const sel = document.getElementById(id);
+        if (!sel) return;
+        const cur = sel.value;
+        sel.innerHTML = '<option value="">— default look —</option>';
+        clipStudio.styles.forEach(s => {
+            const o = document.createElement('option');
+            o.value = s.id;
+            o.textContent = '🎨 ' + s.name;
+            sel.appendChild(o);
+        });
+        if (cur) sel.value = cur;
+    });
+}
+
+function renderStyleLibrary() {
+    const grid = document.getElementById('styleLibraryGrid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    if (!clipStudio.styles.length) {
+        grid.innerHTML = '<div class="clip-muted">No saved styles yet — analyze one above.</div>';
+        return;
+    }
+    clipStudio.styles.forEach(s => {
+        const card = document.createElement('div');
+        card.className = 'clip-video-card';
+        card.style.cursor = 'default';
+        const thumb = s.thumb_url
+            ? '<img src="' + s.thumb_url + '" alt="" style="width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:6px 6px 0 0" />'
+            : '';
+        card.innerHTML = thumb +
+            '<div class="clip-video-meta"><div class="t"></div>' +
+            '<div class="d">' + (s.cuts_per_min || 0) + ' cuts/min · ' +
+                (s.caption_zone ? 'captions: ' + s.caption_zone : 'no captions') + ' · ' +
+                (s.dominant_motion || 'static') + '</div></div>' +
+            '<div class="clip-video-actions"><button class="clip-dl clip-style-del" data-id="' + s.id + '">🗑 Delete</button></div>';
+        card.querySelector('.t').textContent = s.name;
+        grid.appendChild(card);
+    });
+    grid.querySelectorAll('.clip-style-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (!confirm('Delete this style?')) return;
+            try {
+                const r = await fetch('/api/studio/styles/' + btn.dataset.id, {method: 'DELETE'});
+                const d = await r.json();
+                if (d.status === 'success') {
+                    showToast('Style deleted.', 'success');
+                    loadStyleLibrary();
+                } else showToast(d.message || 'Delete failed.', 'error');
+            } catch (e) { showToast('Delete failed: ' + e.message, 'error'); }
+        });
+    });
+}
+
+function renderAnalyzedStyle(profile, sourceUrl) {
+    clipStudio.lastAnalyzed = {profile, source_url: sourceUrl};
+    const box = document.getElementById('styleResultCard');
+    if (!box) return;
+    box.classList.remove('hidden');
+    const p = profile.pacing || {}, c = profile.captions || {},
+          m = profile.motion || {}, a = profile.audio || {};
+    const stats = [
+        ['✂️ Cuts/min', p.cuts_per_min ?? '—'],
+        ['🎞 Avg shot', (p.avg_shot_len_s ?? '—') + 's'],
+        ['💬 Captions', c.present ? (c.zone + ' zone') : 'none detected'],
+        ['📷 Motion', m.dominant || 'static'],
+        ['🗣 Speech', a.wpm ? (a.wpm + ' wpm') : '—'],
+        ['🎵 Music bed', a.music_bed ? 'yes' : 'no'],
+        ['⏱ Duration', fmtTime(profile.duration_s)],
+    ];
+    const thumbs = (profile.thumbs || []).map(t =>
+        '<img src="' + t + '" alt="style frame" />').join('');
+    const words = (profile.transcript || []).map(w => w.word).join(' ');
+    box.innerHTML =
+        '<div class="clip-style-head">✅ Style analyzed — <span class="clip-muted">' +
+            stats.length + ' signals captured</span></div>' +
+        '<div class="clip-stat-grid">' +
+            stats.map(s => '<div class="clip-stat"><b>' + s[0] + '</b><span>' + s[1] + '</span></div>').join('') +
+        '</div>' +
+        (thumbs ? '<div class="clip-thumb-strip">' + thumbs + '</div>' : '') +
+        (words ? '<p class="clip-muted clip-transcript-preview"></p>' : '') +
+        '<div class="clip-row"><input id="styleNameInput" class="clip-input" placeholder="Name this style (e.g. Hormozi fast-cuts)…" />' +
+        '<button class="btn-refresh" id="saveStyleBtn">💾 Save style</button></div>';
+    if (words) box.querySelector('.clip-transcript-preview').textContent =
+        'Script heard: "' + words.slice(0, 220) + (words.length > 220 ? '…' : '') + '"';
+    document.getElementById('saveStyleBtn').addEventListener('click', saveAnalyzedStyle);
+}
+
+async function saveAnalyzedStyle() {
+    const name = (document.getElementById('styleNameInput').value || '').trim();
+    const la = clipStudio.lastAnalyzed;
+    if (!la) { showToast('Analyze a style first.', 'error'); return; }
+    if (!name) { showToast('Give the style a name.', 'error'); return; }
+    try {
+        const r = await fetch('/api/studio/styles', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, source_url: la.source_url, profile: la.profile}),
+        });
+        const d = await r.json();
+        if (d.status === 'success') {
+            showToast('Style saved! Use it on any clip.', 'success');
+            document.getElementById('styleResultCard').classList.add('hidden');
+            clipStudio.lastAnalyzed = null;
+            loadStyleLibrary();
+        } else showToast(d.message || 'Save failed.', 'error');
+    } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
+}
+
+/* ── Clone as-is ── */
+
+/* ── My clips library ── */
+
+const CLIP_KIND_LABEL = {cut: '✂️ cut', random: '🎲 random', music: '🎵 music', clone: '🧬 clone'};
+
+async function loadMyClips() {
+    const grid = document.getElementById('myClipsGrid');
+    try {
+        const r = await fetch('/api/studio/clips?limit=60');
+        const d = await r.json();
+        clipStudio.myClips = d.clips || [];
+    } catch (e) {
+        clipStudio.myClips = [];
+    }
+    if (!grid) return;
+    grid.innerHTML = '';
+    if (!clipStudio.myClips.length) {
+        grid.innerHTML = '<div class="clip-muted">No clips yet — cut one above and it lands here automatically.</div>';
+        return;
+    }
+    clipStudio.myClips.forEach(c => {
+        const card = document.createElement('div');
+        card.className = 'clip-video-card';
+        card.style.cursor = 'default';
+        const media = c.thumb_url
+            ? '<img src="' + c.thumb_url + '" alt="" style="width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:6px 6px 0 0" />'
+            : '<video muted preload="metadata" src="' + c.play_url + '"></video>';
+        const when = (c.created_at || '').slice(0, 16).replace('T', ' ');
+        card.innerHTML = media +
+            '<div class="clip-video-meta"><div class="t">' +
+                '<span class="clip-badge">' + (CLIP_KIND_LABEL[c.kind] || c.kind) + '</span> ' +
+                (c.style_name ? '🎨 ' + c.style_name : '') + '</div>' +
+            '<div class="d">' + (c.duration_s != null ? fmtTime(c.duration_s) + ' · ' : '') + when + '</div></div>' +
+            '<div class="clip-video-actions"><a class="clip-dl" href="' + c.play_url +
+                '" download>⬇ Download</a>' +
+                '<button class="clip-dl clip-clip-del" data-id="' + c.id + '">🗑</button></div>';
+        grid.appendChild(card);
+    });
+    grid.querySelectorAll('.clip-clip-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (!confirm('Delete this clip (file too)?')) return;
+            try {
+                const r = await fetch('/api/studio/clips/' + btn.dataset.id, {method: 'DELETE'});
+                const d = await r.json();
+                if (d.status === 'success') {
+                    showToast('Clip deleted.', 'success');
+                    loadMyClips();
+                } else showToast(d.message || 'Delete failed.', 'error');
+            } catch (e) { showToast('Delete failed: ' + e.message, 'error'); }
+        });
+    });
+}
+
 function initClipStudio() {
     if (clipStudio.initialized) { loadStudioVideos(); return; }
     clipStudio.initialized = true;
@@ -1044,6 +1227,8 @@ function initClipStudio() {
 
     loadStudioVideos();
     loadMusicTracks();
+    loadStyleLibrary();
+    loadMyClips();
 
     // Player: click toggles play/pause, readout follows time.
     const player = $('studioPlayer');
@@ -1121,6 +1306,7 @@ function initClipStudio() {
                 body: JSON.stringify({
                     video_file: clipStudio.videoFile, num_clips: 1,
                     start_sec: start, end_sec: end,
+                    style_id: $('trimStyleSelect').value || null,
                 }),
             });
             const d = await r.json();
@@ -1135,6 +1321,7 @@ function initClipStudio() {
                         '✅ Clip cut: ' + fmtTime(start) + ' → ' + fmtTime(end), 'ok');
                     renderClipCards('randomClipGrid', res.clips);
                     showToast('Clip cut!', 'success');
+                    loadMyClips();
                 }
             }, 'trimStatus', 'Cutting clip');
         } catch (e) {
@@ -1173,6 +1360,7 @@ function initClipStudio() {
                         '✅ Mixed "' + (res.music || 'track') + '" into the video.', 'ok');
                     showToast('Music mixed!', 'success');
                     loadStudioVideos();
+                    loadMyClips();
                     selectStudioVideo({
                         file: res.file, title: '🎵 ' + clipStudio.videoTitle,
                         duration_sec: clipStudio.videoDuration, play_url: res.play_url,
@@ -1197,6 +1385,9 @@ function initClipStudio() {
                     num_clips: parseInt($('numClipsInput').value) || 3,
                     min_sec: parseFloat($('minSecInput').value) || 15,
                     max_sec: parseFloat($('maxSecInput').value) || 45,
+                    style_id: $('randomStyleSelect').value || null,
+                    music_sound_id: clipStudio.soundId || null,
+                    volume: parseFloat($('musicVolume').value) || 0.25,
                 }),
             });
             const d = await r.json();
@@ -1215,11 +1406,95 @@ function initClipStudio() {
                         '✅ Cut ' + n + ' clip' + (n === 1 ? '' : 's') + note + '.', 'ok');
                     renderClipCards('randomClipGrid', res.clips);
                     showToast('Random clips ready!', 'success');
+                    loadMyClips();
                 }
             }, 'randomClipStatus', 'Cutting random clips');
         } finally {
             $('randomClipBtn').classList.remove('spinning');
         }
+    });
+
+    // Step 3b: after a music mix, the library updates too.
+    // Step 5: Style Lab — analyze a viral short's editing style.
+    $('analyzeStyleBtn').addEventListener('click', async () => {
+        const url = ($('styleUrlInput').value || '').trim();
+        if (!url) { showToast('Paste a YouTube Short URL first.', 'error'); return; }
+        setClipStatus('styleAnalyzeStatus', '');
+        document.getElementById('styleResultCard').classList.add('hidden');
+        $('analyzeStyleBtn').classList.add('spinning');
+        try {
+            const r = await fetch('/api/studio/analyze-style', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({url}),
+            });
+            const d = await r.json();
+            if (d.status === 'error' || !r.ok) {
+                setClipStatus('styleAnalyzeStatus', d.message || 'Analysis rejected.', 'error');
+                showToast(d.message || 'Analysis rejected.', 'error');
+                return;
+            }
+            await pollStudioJob('/api/studio/style-status', d.job_id, (err, res) => {
+                if (err) {
+                    setClipStatus('styleAnalyzeStatus', err, 'error');
+                    showToast('Style analysis failed: ' + err, 'error');
+                } else {
+                    setClipStatus('styleAnalyzeStatus', '✅ Style captured — name it and save.', 'ok');
+                    renderAnalyzedStyle(res.profile, res.source_url);
+                    showToast('Style analyzed!', 'success');
+                }
+            }, 'styleAnalyzeStatus', 'Analyzing style');
+        } finally {
+            $('analyzeStyleBtn').classList.remove('spinning');
+        }
+    });
+
+    // Step 6: Clone as-is — reference script + template + style on your footage.
+    $('cloneShortBtn').addEventListener('click', async () => {
+        const refUrl = ($('cloneRefUrlInput').value || '').trim();
+        if (!refUrl) { showToast('Paste the reference Short URL first.', 'error'); return; }
+        if (!clipStudio.videoFile) { showToast('Pick your video in step 1 first.', 'error'); return; }
+        setClipStatus('cloneStatus', '');
+        document.getElementById('cloneResultGrid').innerHTML = '';
+        $('cloneShortBtn').classList.add('spinning');
+        try {
+            const r = await fetch('/api/studio/clone-short', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    reference_url: refUrl, video_file: clipStudio.videoFile,
+                }),
+            });
+            const d = await r.json();
+            if (d.status === 'error' || !r.ok) {
+                setClipStatus('cloneStatus', d.message || 'Clone rejected.', 'error');
+                showToast(d.message || 'Clone rejected.', 'error');
+                return;
+            }
+            await pollStudioJob('/api/studio/clone-status', d.job_id, (err, res) => {
+                if (err) {
+                    setClipStatus('cloneStatus', err, 'error');
+                    showToast('Clone failed: ' + err, 'error');
+                } else {
+                    setClipStatus('cloneStatus',
+                        '✅ Clone ready: ' + res.shots + ' shots, ' +
+                        res.cuts_per_min + ' cuts/min reference.', 'ok');
+                    renderClipCards('cloneResultGrid', [{
+                        play_url: res.play_url,
+                        start_sec: 0, end_sec: res.user_duration_s || 0,
+                    }]);
+                    showToast('Clone as-is ready!', 'success');
+                    loadMyClips();
+                    loadStyleLibrary();
+                }
+            }, 'cloneStatus', 'Cloning short');
+        } finally {
+            $('cloneShortBtn').classList.remove('spinning');
+        }
+    });
+
+    // Step 7: refresh the clip library.
+    $('refreshClipsBtn').addEventListener('click', () => {
+        loadMyClips();
+        showToast('Library refreshed.', 'info');
     });
 
     setClipStep(1);
