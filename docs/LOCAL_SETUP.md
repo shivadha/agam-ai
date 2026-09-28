@@ -2,6 +2,21 @@
 
 Everything is free. Nothing here goes live; it all runs on your machine.
 
+## The easy way — one click
+
+Double-click **`launch_pulseforge.bat`** (in the repo folder). Every time it
+starts, it checks the whole local stack and installs whatever is missing —
+nothing is ever reinstalled:
+
+1. Python dependencies (`scripts/install_local.py`)
+2. **ComfyUI** — cloned automatically if the folder is missing; its python
+   requirements installed; the **LTX-Video 2B** model downloaded if no
+   image-to-video model is found (`scripts/setup_comfyui.py`)
+3. Starts ComfyUI on `127.0.0.1:8188` if it isn't already listening
+4. Starts the app
+
+Use this instead of `start_agam.bat` — it replaces it.
+
 ## After every `git pull`
 
 ```bat
@@ -145,8 +160,38 @@ This generates agent config (`AGENTS.md`, `.claude/`, `.agents/`, `.mcp.json`)
 ## Start the app
 
 ```bat
-start_agam.bat
+launch_pulseforge.bat
 ```
+
+(One click: checks + installs anything missing, starts ComfyUI, starts the
+app. `start_agam.bat` still works but skips the checks.)
 
 Then open the URL it prints, add your free API keys in the API Keys modal
 (Gemini / Fish Audio), and render.
+
+## AI video — ComfyUI + LTX-Video (fully automatic)
+
+You don't need to install ComfyUI yourself: `launch_pulseforge.bat` (or
+`python scripts/setup_comfyui.py`) clones it into the repo folder, installs
+its requirements, and downloads **LTX-Video 2B v0.9.5** (~5.3 GB, one time)
+when no image-to-video model is found. The workflow builder's auto-scan
+provider (`ComfyUI (Auto-Scan Best Model) [Free GPU]`) then picks it on every
+run — it renders ~10s native clips per shot, the longest of any free local
+model on a 6GB card.
+
+### "LTX-2" vs "LTX-Video" — read this before downloading anything
+
+They are different models:
+
+| | LTX-Video 2B ✅ use this | LTX-2 (19B) ❌ not for this card |
+|---|---|---|
+| VRAM need | ~5 GB (fits RTX 3060 6GB) | 20 GB+ |
+| What it does | image-to-video, ~10s clips | video + native audio in one pass |
+| Pipeline support | Full — auto-scanned, auto-picked | Detected and shown, never auto-picked |
+
+LTX-2's 19B weights physically cannot load on a 6GB GPU, and its ComfyUI
+node graph (video+audio) is incompatible with this pipeline's LTX-Video
+workflow — auto-selecting it would be a guaranteed failure. If you already
+downloaded LTX-2 weights, the scan lists them so you can see they were
+found, but the provider dropdown will keep picking LTX-Video 2B. There is
+nothing to fix here; it's the correct behavior on your hardware.

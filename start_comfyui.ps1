@@ -4,10 +4,24 @@ Write-Host "========================================================" -Foregroun
 Write-Host "  PulseForge - ComfyUI AI Video Engine (RTX 3060 6GB)   " -ForegroundColor Green
 Write-Host "========================================================" -ForegroundColor Cyan
 
-$pyPath = "C:\Users\shiva\AppData\Local\Programs\Python\Python311\python.exe"
-if (-not (Test-Path $pyPath)) {
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd) { $pyPath = $cmd.Source }
+# Use python from PATH (py launcher preferred on Windows).
+$pyPath = $null
+$cmd = Get-Command python -ErrorAction SilentlyContinue
+if ($cmd) { $pyPath = $cmd.Source }
+if (-not $pyPath) {
+    Write-Host ""
+    Write-Host "[!!] Python not found on PATH. Install Python 3.10+ from https://www.python.org/downloads/" -ForegroundColor Red
+    Write-Host "     then re-run launch_pulseforge.bat" -ForegroundColor Red
+    exit 1
+}
+
+$comfyDir = Join-Path $PSScriptRoot "ComfyUI"
+if (-not (Test-Path (Join-Path $comfyDir "main.py"))) {
+    Write-Host ""
+    Write-Host "[!!] ComfyUI is not installed at $comfyDir" -ForegroundColor Red
+    Write-Host "     Run launch_pulseforge.bat (or: python scripts\setup_comfyui.py)" -ForegroundColor Yellow
+    Write-Host "     and it will clone ComfyUI + download the LTX-Video model for you." -ForegroundColor Yellow
+    exit 1
 }
 
 # Check if port 8188 is already in use
@@ -35,7 +49,6 @@ if ($conn) {
     }
 }
 
-$comfyDir = Join-Path $PSScriptRoot "ComfyUI"
 Set-Location $comfyDir
 Write-Host "[*] Starting ComfyUI server at http://127.0.0.1:8188..." -ForegroundColor Cyan
 Write-Host "[*] Mode: Dynamic Smart VRAM (RTX 3060 6GB Optimized)" -ForegroundColor Green
