@@ -101,7 +101,7 @@ def _build_system_prompt(emotion: str) -> str:
         "Your task: write ONE single hook line for a YouTube Shorts video.\n\n"
         "STRICT RULES — violating any rule results in immediate rejection:\n"
         f"  1. Maximum 8 words. Fewer is better.\n"
-        f"  2. NEVER start with: 'Today we', 'Hello', 'Welcome', 'In this video', 'Hi', 'Hey guys'.\n"
+        f"  2. NEVER start with: 'Today we', 'Hello', 'Welcome', 'In this video', 'Hi', 'Hey guys', 'Did you know', 'You won't believe'.\n"
         f"  3. MUST create a strong pattern interrupt — make the viewer STOP scrolling.\n"
         f"  4. MUST match the primary emotion: '{emotion.upper()}'.\n"
         f"  5. Use at least ONE power word from this set: {power_words}.\n"
@@ -196,7 +196,12 @@ def _is_valid_hook(hook: str) -> bool:
         return False
     if _count_words(hook) > 8:
         return False
-    banned_starts = ("today we", "hello", "welcome", "in this video", "hi ", "hey guys")
+    # Classic slop openers — banned twice: once in the prompt, once here,
+    # so a fallback template or an LLM that ignores instructions can never
+    # ship one.
+    banned_starts = ("today we", "hello", "welcome", "in this video", "hi ",
+                     "hey guys", "did you know", "you won't believe",
+                     "you wont believe")
     if hook.lower().startswith(banned_starts):
         return False
     return True

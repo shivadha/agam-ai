@@ -53,12 +53,14 @@ def _sanitize_caption_word(word: str) -> str:
     return _HYPHEN_RE.sub(_NB_HYPHEN, w)
 
 
-# At Arial Bold 72 on a 1080px frame with 80px side margins, ~20 uppercase
-# characters fit on one line. Fixed 5-word chunks overflowed, and libass
-# WrapStyle 0 then broke hyphenated compounds mid-word ("LIVE-ACTION" ->
-# "LIVE" / "-ACTION"). Lines are chunked to fit instead.
-_MAX_LINE_CHARS = 20
-_MAX_CHUNK_WORDS = 6
+# Kinetic (Hormozi-style) captions: 2–3 words per page, UPPERCASE, white text,
+# active word gold with a scale pop on each beat, lower-third placement.
+# At Montserrat ExtraBold 80 on a 1080px frame with 80px side margins, ~18
+# uppercase characters fit on one line. Fixed 5-word chunks overflowed, and
+# libass WrapStyle 0 then broke hyphenated compounds mid-word ("LIVE-ACTION"
+# -> "LIVE" / "-ACTION"). Lines are chunked to fit instead.
+_MAX_LINE_CHARS = 18
+_MAX_CHUNK_WORDS = 3
 
 
 def _reflow_leading_hyphens(chunks: list) -> list:
@@ -106,13 +108,14 @@ def _ffmpeg_bin() -> str:
 
 
 def build_caption_ass(caption_events: list, ass_path: str,
-                      highlight_bgr: str = "&H0000FFFF") -> str | None:
-    """Build a karaoke-style ASS file from (words, active_idx, start, end) events.
+                      highlight_bgr: str = "&H003FD2FF") -> str | None:
+    """Build a kinetic Hormozi-style karaoke ASS file from word events.
 
-    Re-chunks the flat word stream into ≤5-word display lines so every line
-    fits the frame (no halfway-cut text), and emits one Dialogue per word
-    with the spoken word highlighted — the Hormozi look, burned reliably by
-    ffmpeg's subtitles filter instead of hundreds of fragile TextClips.
+    Re-chunks the flat word stream into ≤3-word display pages (UPPERCASE,
+    Montserrat ExtraBold 80, 3px outline, lower-third) and emits one Dialogue
+    per word with the spoken word in gold (#FFD23F) and a scale pop
+    (112% -> 100% over 150ms) on every beat. Burned by ffmpeg's subtitles
+    filter instead of hundreds of fragile TextClips.
     """
     flat = []
     for (words, _w_idx, w_start, w_end) in caption_events:
@@ -155,8 +158,8 @@ def build_caption_ass(caption_events: list, ass_path: str,
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        "Style: Cap,Arial,72,&H00FFFFFF,&H00FFFFFF,&H80000000,&H00000000,"
-        "-1,0,0,0,100,100,0,0,1,4,1,2,80,80,380,1\n\n"
+        "Style: Cap,Montserrat ExtraBold,80,&H00FFFFFF,&H00FFFFFF,&H80000000,&H00000000,"
+        "-1,0,0,0,100,100,0,0,1,4,1,2,80,80,360,1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
         "Effect, Text\n"
@@ -176,7 +179,11 @@ def build_caption_ass(caption_events: list, ass_path: str,
             parts = []
             for k, lw in enumerate(line_words):
                 if k == j:
-                    parts.append("{\\c%s}%s{\\c%s}" % (highlight_bgr, lw.upper(), WHITE))
+                    # Active word: gold + a scale pop (112% -> 100% in 150ms)
+                    # so every spoken beat visually punches.
+                    parts.append(
+                        "{\\c%s\\fscx112\\fscy112\\t(0,150,\\fscx100\\fscy100)}%s{\\c%s}"
+                        % (highlight_bgr, lw.upper(), WHITE))
                 else:
                     parts.append(lw.upper())
             events.append("Dialogue: 0,%s,%s,Cap,,0,0,0,,%s"
@@ -190,8 +197,9 @@ def build_caption_ass(caption_events: list, ass_path: str,
 def burn_captions_ass(video_path: str, ass_path: str) -> str:
     """Burn an ASS subtitle file into the video via ffmpeg. Returns final path.
 
-    The same pass also applies a light film finish (grain + vignette) so the
-    whole video shares one cinematic grade instead of the flat '80s look.
+    The same pass also applies a light film finish (grain + warm grade +
+    vignette) so the whole video shares one cinematic grade instead of the
+    flat AI-plastic look.
     """
     import subprocess
     if not ass_path or not os.path.exists(ass_path):
@@ -201,6 +209,7 @@ def burn_captions_ass(video_path: str, ass_path: str) -> str:
     filt_path = ass_path.replace("\\", "/").replace(":", "\\:").replace("'", "\\'").replace(",", "\\,")
     vf = (f"subtitles='{filt_path}',"
           f"noise=alls=6:allf=t,"      # fine film grain, temporally animated
+          f"colorbalance=rs=0.06:gs=0.015:bs=-0.06,"  # subtle warm grade
           f"vignette=angle=PI/4.6")    # gentle edge falloff
     out_path = os.path.splitext(video_path)[0] + "_captioned.mp4"
     cmd = [ffmpeg, "-y", "-i", video_path,
@@ -627,6 +636,23 @@ def generate_procedural_hit(output_path, duration=1.2):
             wav.writeframesraw(struct.pack('<h', val))
 
 
+def generate_procedural_chime(output_path, duration=0.6):
+    # Bright sparkle for scene reveals / tips: 1568 Hz (G6) + shimmering
+    # 2nd harmonic, exponential decay. 0.3–0.8s, sits above narration.
+    sample_rate = 22050
+    num_samples = int(duration * sample_rate)
+    with wave.open(output_path, 'wb') as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        for i in range(num_samples):
+            t = i / sample_rate
+            env = math.exp(-7.0 * t)
+            val = int(7000 * env * (math.sin(2 * math.pi * 1568 * t)
+                                   + 0.4 * math.sin(2 * math.pi * 3136 * t)))
+            wav.writeframesraw(struct.pack('<h', val))
+
+
 def make_progress_bar(duration, width, bar_height=14, color=(0, 255, 170)):
     from moviepy import VideoClip
     import numpy as np
@@ -695,6 +721,27 @@ def _regenerate_dead_video(image_path, scene, topic_title, duration, output_dir)
     except Exception as e:
         print(f"[video_assembler] Regeneration failed: {e}")
     return None
+
+
+# Max seconds any single visual may hold the frame. The #1 visual slop
+# signal is one image (or one AI clip) held for 6–10s while the voice talks
+# underneath. Scenes longer than this are split into sub-shots that cycle
+# the scene's media with a fresh motion treatment per sub-shot.
+_MAX_SHOT_SECONDS = 3.0
+
+
+def _split_scene_media(media_paths, scene_dur, max_shot=_MAX_SHOT_SECONDS):
+    """Split a scene's span into ≤max_shot-second sub-shots.
+
+    When a scene has fewer media files than sub-shots needed, the media are
+    cycled (img1, img2, img1, img2, ...) so no single visual holds the frame.
+    Returns [(path, shot_duration), ...] summing to scene_dur.
+    """
+    media_paths = [p for p in (media_paths or []) if p]
+    n_shots = max(1, int(-(-max(0.25, float(scene_dur)) // max_shot)))  # ceil
+    per = float(scene_dur) / n_shots
+    return [(media_paths[i % max(1, len(media_paths))], per)
+            for i in range(n_shots)]
 
 
 def _scene_time_boundaries(scenes, timed_words, total_duration):
@@ -913,8 +960,10 @@ def assemble_cinematic_video(
     # Assets for SFX fallbacks
     whoosh_path = os.path.join(output_dir, "sfx_whoosh.wav")
     hit_path = os.path.join(output_dir, "sfx_hit.wav")
+    chime_path = os.path.join(output_dir, "sfx_chime.wav")
     if not os.path.exists(whoosh_path): generate_procedural_whoosh(whoosh_path)
     if not os.path.exists(hit_path): generate_procedural_hit(hit_path)
+    if not os.path.exists(chime_path): generate_procedural_chime(chime_path)
 
     # 2. Scene Compilation
     # ── Word timings + script words: each scene's visuals must cover exactly
@@ -936,6 +985,7 @@ def assemble_cinematic_video(
     video_clips = []
     current_time = 0.0
     boundary_times = []
+    scene_start_times = []  # scene reveals (get the chime), vs every sub-shot
     
     effects_list = ['zoom_burst_in', 'zoom_burst_out', 'whip_pan_left', 'whip_pan_right', 'speed_ramp', 'motion_blur_push', 'glitch_flash']
 
@@ -976,9 +1026,11 @@ def assemble_cinematic_video(
                 video_paths = live
 
         if video_paths:
-            shot_duration = scene_dur / len(video_paths)
+            # Anti-slop cadence: no visual holds the frame longer than
+            # _MAX_SHOT_SECONDS — the scene's videos cycle across sub-shots.
             fb_img = (img_paths or [None])[0]
-            for shot_idx, video_path in enumerate(video_paths):
+            for shot_idx, (video_path, shot_duration) in enumerate(
+                    _split_scene_media(video_paths, scene_dur)):
                 vc = prepare_video_shot(video_path, shot_duration, 1080, 1920,
                                         fallback_image=fb_img,
                                         motion_prompt=(scene.get("image_to_video_prompt")
@@ -986,6 +1038,8 @@ def assemble_cinematic_video(
                 video_clips.append(vc)
                 if shot_idx > 0 or idx > 0:
                     boundary_times.append(current_time)
+                    if shot_idx == 0:
+                        scene_start_times.append(current_time)  # scene reveal
                 current_time += shot_duration
         else:
             # Generate authentic topic-aligned visual if scene has no images (NEVER use random cached files)
@@ -1003,17 +1057,23 @@ def assemble_cinematic_video(
                 _create_placeholder_image(fallback_img, f"{topic_title} Scene {idx+1}", 1080, 1920, seed_val=idx+1)
                 img_paths = [fallback_img]
                 
-            shot_duration = scene_dur / len(img_paths)
-            for shot_idx, img_path in enumerate(img_paths):
-                effect_type = effects_list[idx % len(effects_list)]
+            # Anti-slop cadence: no visual holds the frame longer than
+            # _MAX_SHOT_SECONDS — the scene's images cycle across sub-shots,
+            # each with a DIFFERENT motion treatment so repeats don't read
+            # as a held still.
+            for shot_idx, (img_path, shot_duration) in enumerate(
+                    _split_scene_media(img_paths, scene_dur)):
+                effect_type = effects_list[(idx + shot_idx) % len(effects_list)]
                 if idx == 0 and shot_idx == 0:
                     effect_type = 'zoom_burst_in'
-                    
+
                 vc = create_advanced_motion_effect(img_path, shot_duration, 1080, 1920, effect_type)
                 video_clips.append(vc)
                 
                 if shot_idx > 0 or idx > 0:
                     boundary_times.append(current_time)
+                    if shot_idx == 0:
+                        scene_start_times.append(current_time)  # scene reveal
                 current_time += shot_duration
 
         clips_added = len(video_clips) - clips_before
@@ -1101,6 +1161,10 @@ def assemble_cinematic_video(
                 except Exception as e:
                     print(f"[video_assembler] Error mixing SFX: {e}")
     else:
+        # No curated sfx_timeline: every sub-shot boundary (≤3s cadence) gets
+        # a whoosh; emphasis beats get an impact; every scene REVEAL gets a
+        # bright chime. This is the free sound-design layer that stops a
+        # Short from reading as flat AI slop.
         for bt in boundary_times:
             if whoosh_path:
                 try:
@@ -1112,6 +1176,13 @@ def assemble_cinematic_video(
                 try:
                     hit = AudioFileClip(hit_path)
                     tracks.append(hit.with_start(bt).with_volume_scaled(0.24))
+                except Exception:
+                    pass
+        for st in scene_start_times:
+            if chime_path:
+                try:
+                    chime = AudioFileClip(chime_path)
+                    tracks.append(chime.with_start(max(0.0, st - 0.1)).with_volume_scaled(0.22))
                 except Exception:
                     pass
 
@@ -1132,13 +1203,13 @@ def assemble_cinematic_video(
     if caption_events:
         try:
             def _hex_to_ass_bgr(hex_color: str) -> str:
-                h = (hex_color or "#FFE600").lstrip("#")
+                h = (hex_color or "#FFD23F").lstrip("#")
                 if len(h) != 6:
-                    h = "FFE600"
+                    h = "FFD23F"
                 r, g, b = h[0:2], h[2:4], h[4:6]
                 return f"&H00{b}{g}{r}".upper()
 
-            bp_primary = blueprint.get("caption_color", "#FFE600")
+            bp_primary = blueprint.get("caption_color", "#FFD23F")
             ass_path = os.path.join(os.path.dirname(os.path.abspath(output_path)),
                                     f"captions_{os.path.splitext(os.path.basename(output_path))[0]}.ass")
             caption_ass_path = build_caption_ass(

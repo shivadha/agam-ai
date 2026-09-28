@@ -331,6 +331,14 @@ def test_tts(provider: str = "", api_key: str = "", voice: str = "") -> dict:
     prov = (provider or "").lower()
     v = (voice or "").lower()
 
+    if "chatterbox" in prov or "chatterbox" in v:
+        import importlib.util
+        if importlib.util.find_spec("chatterbox") is not None:
+            return _ok("Chatterbox", "Chatterbox local TTS installed (resemble-ai/chatterbox, MIT, free).", t0)
+        return _fail("Chatterbox selected but the 'chatterbox-tts' package is not installed. "
+                     "Run scripts/install_local.py (install_local.bat on Windows) after pulling.",
+                     t0, "Chatterbox")
+
     if "omni" in prov or "omni" in v:
         import importlib.util
         import shutil

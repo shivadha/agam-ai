@@ -150,6 +150,24 @@ def main():
             log(f"{SKIP} model pre-download failed (it will download on first "
                 "TTS use instead — needs internet + HF access).")
 
+    # 3c. Chatterbox (MIT, human-grade local TTS — primary voice) --------
+    step("3c/6 Chatterbox local TTS (resemble-ai/chatterbox, free, MIT)")
+    import importlib.util
+    if importlib.util.find_spec("chatterbox") is None:
+        log("Installing `chatterbox-tts` from PyPI (stable release)...")
+        if pip_install("chatterbox-tts") != 0:
+            log(f"{FAIL} `pip install chatterbox-tts` failed.")
+        import importlib
+        importlib.invalidate_caches()
+    if importlib.util.find_spec("chatterbox") is not None:
+        log(f"{PASS} `chatterbox-tts` package installed.")
+    else:
+        log(f"{FAIL} `chatterbox-tts` still not importable — TTS node option "
+            "'Chatterbox (Local Free)' will fall back to Edge-TTS.")
+    # The Turbo model (~1GB) auto-downloads from HF on first use; no
+    # pre-download here (HF cache check for this repo family is unreliable).
+    log(f"{SKIP} Chatterbox model downloads on first TTS use (one time, ~1GB).")
+
     # 4. ffmpeg ------------------------------------------------------------
     step("4/6  ffmpeg (audio/video conversion)")
     if shutil.which("ffmpeg"):

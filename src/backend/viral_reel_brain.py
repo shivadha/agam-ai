@@ -48,7 +48,7 @@ VIRAL_BLUEPRINTS = {
         "camera_motion": "dynamic_snap_zoom",
         "bgm_genre": "dark_phonk",
         "ducking_db": -14,
-        "caption_color": "#FFE600",
+        "caption_color": "#FFD23F",
         "caption_accent": "#00FFAA",
         "caption_style": "yellow_bold_kinetic",
         "sfx_recipe": ["vine_boom", "whip_whoosh", "glitch_hit", "bass_drop", "digital_bell"],

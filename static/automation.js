@@ -152,7 +152,7 @@ const NODE_CONFIGS = {
         { key:'keywords', label:'Focus Keywords', type:'text', placeholder:'AI, automation, YouTube...', def:'' },
     ],
     'tts': [
-        { key:'voice',    label:'Voice',         type:'select', opts:['Kokoro-82M (af_heart) [Local Free]','Kokoro-82M (am_adam) [Local Free]','OmniVoice (Local Free)','Fish Audio S2.1 (Free API)','en-US-ChristopherNeural (Edge)','en-US-JennyNeural (Edge)','en-GB-RyanNeural (Edge)'], def:'Kokoro-82M (af_heart) [Local Free]' },
+        { key:'voice',    label:'Voice',         type:'select', opts:['Chatterbox (Local Free)','Kokoro-82M (af_heart) [Local Free]','Kokoro-82M (am_adam) [Local Free]','OmniVoice (Local Free)','Fish Audio S2.1 (Free API)','en-US-ChristopherNeural (Edge)','en-US-JennyNeural (Edge)','en-GB-RyanNeural (Edge)'], def:'Chatterbox (Local Free)' },
         { key:'voice_preset', label:'Signature Voice Preset (overrides voice)', type:'text', placeholder:'e.g. my-channel-voice', def:'' },
         { key:'speed',    label:'Speed',         type:'range',  min:0.5, max:2.0, step:0.1, def:1.1 },
         { key:'language', label:'Language',      type:'select', opts:['English','Hindi','Spanish','French','Japanese'], def:'English' },
@@ -277,7 +277,7 @@ const FREE_MODE_PRESETS = {
     'extract-viral-angle': { model: 'Gemini 2.0 Flash [Free]' },
     'gen-hook':            { model: 'Gemini 2.0 Flash [Free]' },
     'clone-short':         { model: 'Groq (Qwen 3.8 27B) [Free]' },
-    'tts':                 { voice: 'Kokoro-82M (af_heart) [Local Free]' },
+    'tts':                 { voice: 'Chatterbox (Local Free)' },
     'gen-image':           { model: 'Pollinations FLUX [Free]' },
     'image-gen':           { model: 'Pollinations FLUX [Free]' },
     'visuals':             { model: 'Pollinations FLUX [Free]' },
@@ -309,7 +309,7 @@ function setFreeMode(on, silent) {
     saveUndo();
     if (!silent) {
         showToast(`💰 Free Mode ON — ${changed} node${changed === 1 ? '' : 's'} switched to free providers.`, 'success', 4000);
-        logAdd(`[FreeMode] 💰 Enabled — ${changed} node(s) set to zero-cost providers (Gemini free / Kokoro local / Pollinations / ComfyUI local).`, 'success');
+        logAdd(`[FreeMode] 💰 Enabled — ${changed} node(s) set to zero-cost providers (Gemini free / Chatterbox local / Pollinations / ComfyUI local).`, 'success');
     }
 }
 

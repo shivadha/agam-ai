@@ -253,38 +253,116 @@ def _create_placeholder_image(output_path: str, prompt: str, width: int, height:
     print(f"[image_gen] OK: Cinematic contextual artwork generated for '{display_title}' at {output_path}")
 
 
+# ── Anti-slop image stack (2026-09-28 research: "no-AI-slop Shorts") ────
+# The glossy plastic AI look has known causes with known fixes. They live
+# here, in one central place, so every image the pipeline makes gets them.
+
+# Style anchor appended to EVERY prompt: names a real medium, a real film
+# stock and real imperfections. "beautiful / studio quality / 8k" style
+# fluff is what produces the waxy render sheen.
+STYLE_ANCHOR = ("shot on 35mm film, Kodak Portra 400, soft warm color grade, "
+                "subtle film grain, natural skin texture with visible pores, "
+                "candid, imperfect, photojournalistic")
+
+# One idea per image, subject gets headroom (captions live in the
+# lower third), and NEVER any baked-in text — captions are burned in the
+# edit, never generated into the frame.
+COMPOSITION_RULES = ("vertical 9:16 composition, subject with headroom above, "
+                     "lower third left clear for captions, one clear subject, "
+                     "no text, no letters, no watermark, no logo")
+
+# Negatives that kill the slop tells on NON-distilled checkpoints. Distilled
+# checkpoints (Lightning/Turbo, CFG=1) ignore negatives — they are inert
+# there but harmless to send.
+ANTI_SLOP_NEGATIVE = ("plastic skin, glossy, cgi, 3d render, cartoon, neon, "
+                      "gradient background, text, letters, watermark, logo, "
+                      "bad hands, deformed, blurry, low quality")
+
+_VIDEO_MODEL_MARKERS = ("svd", "wan", "ltx", "video")
+
+
+def build_image_prompt(raw_prompt: str) -> str:
+    """Apply the anti-slop template to a raw scene prompt (idempotent).
+
+    Returns: raw prompt + composition rules + style anchor. Never bakes
+    text into the image; the film-stock anchor kills the plastic render
+    sheen; the composition rules keep captions readable.
+    """
+    base = (raw_prompt or "").strip().rstrip(".,;:")
+    if not base:
+        base = "cinematic vertical scene"
+    if "Kodak Portra" in base:  # already templated — don't double-append
+        return base
+    return f"{base}, {COMPOSITION_RULES}, {STYLE_ANCHOR}"
+
+
+def _is_distilled_checkpoint(ckpt_name: str) -> bool:
+    """True for few-step distilled checkpoints (Lightning/Turbo/Hyper).
+
+    These run CFG=1 with ~8 steps; negative prompts are inert on them.
+    """
+    cl = (ckpt_name or "").lower()
+    return any(m in cl for m in ("lightning", "turbo", "hyper", "dmd2", "lcm"))
+
+
+def _pick_image_checkpoint(checkpoints: list) -> tuple[str | None, bool]:
+    """Pick the best txt2img checkpoint: SDXL-Lightning first, then SDXL.
+
+    Returns (ckpt_name, is_distilled). Dedicated video checkpoints (SVD /
+    Wan / LTX) are excluded — they are for image-to-VIDEO, not txt2img.
+    """
+    cands = [c for c in (checkpoints or [])
+             if c and not any(v in c.lower() for v in _VIDEO_MODEL_MARKERS)]
+    if not cands:
+        return None, False
+
+    def _rank(c):
+        cl = c.lower()
+        return (
+            0 if "lightning" in cl else 1,   # SDXL-Lightning 8-step first
+            0 if "xl" in cl else 1,          # then any SDXL-class
+            0 if "realistic" in cl or "photo" in cl else 1,  # photoreal bases
+            c,
+        )
+    best = sorted(cands, key=_rank)[0]
+    return best, _is_distilled_checkpoint(best)
+
+
 def _generate_comfyui_image(prompt: str, output_path: str, width: int = 512, height: int = 768, base_url: str = "http://127.0.0.1:8188") -> str:
     """Generates an AI image locally using ComfyUI txt2img workflow (100% free, offline, GPU-accelerated)."""
     try:
         req = requests.get(f"{base_url}/system_stats", timeout=2)
         if req.status_code != 200:
             return None
-            
+
         models_resp = requests.get(f"{base_url}/models/checkpoints", timeout=3)
         checkpoints = models_resp.json() if models_resp.status_code == 200 else []
         if not checkpoints:
             return None
-            
-        # Find image checkpoint (avoid dedicated video models for txt2img)
-        img_model = None
-        for ckpt in checkpoints:
-            cl = ckpt.lower()
-            if not any(v in cl for v in ["svd", "wan", "ltx", "video"]):
-                img_model = ckpt
-                break
-                
+
+        # Prefer SDXL-Lightning (8-step, CFG=1) — the 6GB anti-slop sweet
+        # spot — over whatever checkpoint happens to be first in the list.
+        img_model, distilled = _pick_image_checkpoint(checkpoints)
         if not img_model:
             return None
-            
-        print(f"[image_gen] [100% Free Local ComfyUI] Synthesizing image with checkpoint '{img_model}'...")
+
+        # Distilled checkpoints want few steps + CFG=1 (+ sgm_uniform
+        # scheduler); full checkpoints get the classic 20-step / CFG 7.
+        steps, cfg, scheduler = (8, 1.0, "sgm_uniform") if distilled else (20, 7.0, "normal")
+        # Native vertical bucket for Shorts; 832×1216 is SDXL-comfortable.
+        lat_w, lat_h = min(width, 832), min(height, 1216)
+        prompt = build_image_prompt(prompt)
+
+        print(f"[image_gen] [100% Free Local ComfyUI] Synthesizing image with checkpoint '{img_model}' "
+              f"({'distilled' if distilled else 'full'}, {steps} steps, CFG {cfg})...")
         prompt_workflow = {
             "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": img_model}},
-            "2": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt[:350], "clip": ["1", 1]}},
-            "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry, low quality, distorted, bad anatomy, text, watermark", "clip": ["1", 1]}},
-            "4": {"class_type": "EmptyLatentImage", "inputs": {"width": min(width, 768), "height": min(height, 1024), "batch_size": 1}},
+            "2": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt[:600], "clip": ["1", 1]}},
+            "3": {"class_type": "CLIPTextEncode", "inputs": {"text": ANTI_SLOP_NEGATIVE, "clip": ["1", 1]}},
+            "4": {"class_type": "EmptyLatentImage", "inputs": {"width": lat_w, "height": lat_h, "batch_size": 1}},
             "5": {"class_type": "KSampler", "inputs": {
                 "model": ["1", 0], "positive": ["2", 0], "negative": ["3", 0], "latent_image": ["4", 0],
-                "seed": int(time.time()*1000) % 2147483647, "steps": 20, "cfg": 7.0, "sampler_name": "euler", "scheduler": "normal", "denoise": 1.0
+                "seed": int(time.time()*1000) % 2147483647, "steps": steps, "cfg": cfg, "sampler_name": "euler", "scheduler": scheduler, "denoise": 1.0
             }},
             "6": {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["1", 2]}},
             "7": {"class_type": "SaveImage", "inputs": {"images": ["6", 0], "filename_prefix": "pulseforge_img"}}
@@ -313,10 +391,99 @@ def _generate_comfyui_image(prompt: str, output_path: str, width: int = 512, hei
                         with open(output_path, "wb") as f:
                             f.write(v_resp.content)
                         print(f"[image_gen] [SUCCESS] ComfyUI local image saved to {output_path}")
+                        # Optional FaceDetailer pass (AGAM_FACEDETAIL=1) —
+                        # fixes waxy/plastic faces; skipped by default.
+                        _facedetail_pass(base_url, output_path, img_model, distilled)
                         return output_path
         return None
     except Exception as e:
         print(f"[image_gen] ComfyUI local image note: {e}")
+        return None
+
+
+def _facedetail_pass(base_url: str, image_path: str, img_model: str,
+                   distilled: bool) -> str | None:
+    """Optional ComfyUI-Impact-Pack FaceDetailer pass (uncanny-face killer).
+
+    Runs ONLY when AGAM_FACEDETAIL=1 and ComfyUI has the Impact Pack —
+    default renders are untouched. Re-imports the generated image, runs
+    FaceDetailer at low denoise (0.20–0.26) to fix waxy/plastic faces, and
+    overwrites image_path with the detailed result. Returns image_path on
+    success, None when skipped or failed.
+    """
+    if os.environ.get("AGAM_FACEDETAIL", "0") != "1":
+        return None
+    try:
+        info = requests.get(f"{base_url}/object_info/FaceDetailer", timeout=5)
+        if info.status_code != 200:
+            print("[image_gen] FaceDetailer not found in ComfyUI "
+                  "(install ComfyUI-Impact-Pack) — skipping detail pass.")
+            return None
+        with open(image_path, "rb") as fh:
+            up = requests.post(
+                f"{base_url}/upload/image",
+                files={"image": (os.path.basename(image_path), fh,
+                                 "image/png")},
+                data={"overwrite": "true"}, timeout=60)
+        if up.status_code != 200:
+            print(f"[image_gen] FaceDetailer upload failed ({up.status_code}).")
+            return None
+        up_name = up.json().get("name") or os.path.basename(image_path)
+
+        steps = 8 if distilled else 20
+        wf = {
+            "10": {"class_type": "LoadImage",
+                   "inputs": {"image": up_name}},
+            "11": {"class_type": "CheckpointLoaderSimple",
+                   "inputs": {"ckpt_name": img_model}},
+            "12": {"class_type": "FaceDetailer", "inputs": {
+                "image": ["10", 0],
+                "model": ["11", 0], "clip": ["11", 1], "vae": ["11", 2],
+                "guide_size": 512, "guide_size_for": True, "max_size": 768,
+                "seed": int(time.time() * 1000) % 2147483647,
+                "steps": steps, "cfg": 1.0 if distilled else 7.0,
+                "sampler_name": "euler",
+                "scheduler": "sgm_uniform" if distilled else "normal",
+                "denoise": 0.24, "feather": 5,
+                "noise_mask": True, "force_inpaint": True,
+                "bbox_threshold": 0.5, "bbox_dilation": 10,
+                "bbox_crop_factor": 3.0,
+                "sam_detection_hint": "center-1", "sam_dilation": 0,
+                "sam_threshold": 0.93, "sam_bbox_expansion": 0,
+                "sam_mask_hint_threshold": 0.7,
+                "sam_mask_hint_use_negative": "False",
+                "drop_size": 10, "cycle": 1}},
+            "13": {"class_type": "SaveImage",
+                   "inputs": {"images": ["12", 0],
+                              "filename_prefix": "pulseforge_detail"}},
+        }
+        q = requests.post(f"{base_url}/prompt", json={"prompt": wf}, timeout=10)
+        if q.status_code != 200:
+            return None
+        prompt_id = q.json().get("prompt_id")
+        if not prompt_id:
+            return None
+        for _ in range(30):
+            time.sleep(3)
+            h = requests.get(f"{base_url}/history/{prompt_id}", timeout=5)
+            if h.status_code == 200:
+                outputs = h.json().get(prompt_id, {}).get("outputs", {})
+                if "13" in outputs and outputs["13"].get("images"):
+                    info_img = outputs["13"]["images"][0]
+                    v = requests.get(
+                        f"{base_url}/view?filename={info_img.get('filename')}"
+                        f"&subfolder={info_img.get('subfolder', '')}&type=output",
+                        timeout=15)
+                    if v.status_code == 200 and len(v.content) > 1000:
+                        with open(image_path, "wb") as f:
+                            f.write(v.content)
+                        print("[image_gen] FaceDetailer pass applied "
+                              f"-> {os.path.basename(image_path)}")
+                        return image_path
+        print("[image_gen] FaceDetailer pass timed out — keeping base image.")
+        return None
+    except Exception as e:
+        print(f"[image_gen] FaceDetailer pass note: {e}")
         return None
 
 

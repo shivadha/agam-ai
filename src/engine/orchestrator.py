@@ -15,6 +15,30 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+
+def _spoken_script_text(audio_path):
+    """Return the TTS-normalized script for an audio file, or None.
+
+    voice_gen writes <audio>.spoken.txt holding the exact words the voice
+    spoke ("ten lakh rupees", "M-B-A"). Caption reconciliation must use
+    THESE words, not the raw script with ₹/%/abbreviation tokens — otherwise
+    captions disagree with the voice.
+    """
+    if not audio_path:
+        return None
+    try:
+        from src.backend.tts_normalize import spoken_sidecar_path
+        sp = spoken_sidecar_path(audio_path)
+        if sp and os.path.exists(sp):
+            with open(sp, "r", encoding="utf-8") as fh:
+                text = fh.read().strip()
+            if text:
+                return text
+    except Exception:
+        pass
+    return None
+
+
 class StateStore:
     def __init__(self):
         self.store = {}
@@ -787,8 +811,11 @@ class WorkflowEngine:
                     word_timings_path=word_timings_path,
                     # Exact words TTS spoke — lets the assembler reconcile
                     # caption words to the voice and sync each scene's visuals
-                    # to its narration span (never an equal split).
-                    script_text=node_data.get('script') or self._find_in_state('script')
+                    # to its narration span (never an equal split). Prefer the
+                    # <audio>.spoken.txt sidecar (TTS-normalized: "ten lakh
+                    # rupees", "M-B-A") over the raw script with ₹/% tokens.
+                    script_text=_spoken_script_text(audio_path)
+                    or node_data.get('script') or self._find_in_state('script')
                 )
                 
                 result = {

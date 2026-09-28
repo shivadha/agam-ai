@@ -95,6 +95,158 @@ async def _generate_audio_async(text: str, output_path: str, voice: str):
     return output_path, srt_path
 
 
+# ── Chatterbox TTS (resemble-ai/chatterbox — free, local, MIT) ──────────
+CHATTERBOX_MODEL = os.environ.get("CHATTERBOX_MODEL", "").strip() or None
+CHATTERBOX_BACKEND = os.environ.get("CHATTERBOX_BACKEND", "turbo").strip().lower()
+CHATTERBOX_EXAGGERATION = float(os.environ.get("CHATTERBOX_EXAGGERATION", "0.6") or 0.6)
+CHATTERBOX_CFG_WEIGHT = float(os.environ.get("CHATTERBOX_CFG_WEIGHT", "0.4") or 0.4)
+CHATTERBOX_LANGUAGE = os.environ.get("CHATTERBOX_LANGUAGE", "en").strip() or "en"
+
+
+def _chatterbox_available() -> bool:
+    """True when the `chatterbox-tts` package is importable (no torch import here)."""
+    import importlib.util
+    return importlib.util.find_spec("chatterbox") is not None
+
+
+def _chatterbox_default_ref() -> str | None:
+    """Resolve the default voice-clone reference, in priority order.
+
+    1. CHATTERBOX_REF_AUDIO env var
+    2. assets/chatterbox_ref.wav (user drops ONE energetic 10–30s clip here
+       and every render clones it automatically)
+    """
+    env_ref = os.environ.get("CHATTERBOX_REF_AUDIO", "").strip()
+    if env_ref:
+        return env_ref
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(here, "..", "..", "assets", "chatterbox_ref.wav"),
+        os.path.join(here, "..", "..", "assets", "chatterbox_ref.mp3"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return None
+
+
+def _parse_chatterbox_voice(voice: str) -> dict:
+    """Parse the Chatterbox voice spec into a worker kwargs dict.
+
+    Accepted forms (case-insensitive prefix):
+      chatterbox | Chatterbox (Local Free)  -> turbo, clone ref from
+                                              CHATTERBOX_REF_AUDIO or
+                                              assets/chatterbox_ref.wav
+      chatterbox:turbo                       -> Turbo 350M (default)
+      chatterbox:multilingual                -> Multilingual 500M (23+ langs;
+                                              CHATTERBOX_LANGUAGE / --language)
+      chatterbox:clone:<ref.wav>             -> zero-shot clone of this clip
+    The emotion in the reference carries into the output — clone an
+    energetic, conversational clip, get energetic narration.
+    """
+    v = (voice or "").strip()
+    low = v.lower()
+    spec = {"backend": "turbo", "ref_audio": None}
+    body = ""
+    if low.startswith("chatterbox:"):
+        body = v[len("chatterbox:"):]
+    elif low.startswith("chatterbox"):
+        body = ""
+    else:
+        body = v
+
+    bl = body.strip().lower()
+    if bl.startswith("multilingual"):
+        spec["backend"] = "multilingual"
+    elif bl.startswith("turbo"):
+        spec["backend"] = "turbo"
+    elif bl.startswith("clone:"):
+        ref = body.strip()[6:].strip()
+        spec["ref_audio"] = ref or None
+    if not spec["ref_audio"]:
+        spec["ref_audio"] = _chatterbox_default_ref()
+    return spec
+
+
+def _generate_audio_chatterbox(text: str, output_path: str, voice: str = "chatterbox",
+                               exaggeration: float = None, cfg_weight: float = None,
+                               language: str = None):
+    """Generate audio via local Chatterbox (MIT, ~2–3GB VRAM, human-grade TTS).
+
+    Runs src/backend/chatterbox_synthesize.py in a subprocess so the web app
+    never imports torch; the model loads once per call and VRAM is released
+    when the worker exits. Raises RuntimeError on any failure — the caller
+    falls back to Edge-TTS.
+    """
+    import subprocess
+    import sys
+    import tempfile
+
+    if not _chatterbox_available():
+        raise RuntimeError(
+            "Chatterbox is not installed. Run `python scripts/install_local.py` "
+            "(or install_local.bat on Windows) after pulling — it installs the "
+            "`chatterbox-tts` package (MIT, free).")
+
+    spec = _parse_chatterbox_voice(voice)
+    if spec["ref_audio"] and not os.path.exists(spec["ref_audio"]):
+        raise RuntimeError(f"Chatterbox clone reference not found: {spec['ref_audio']}")
+
+    helper = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "chatterbox_synthesize.py")
+    tmpdir = tempfile.mkdtemp(prefix="chatterbox_")
+    text_file = os.path.join(tmpdir, "input.txt")
+    wav_tmp = os.path.join(tmpdir, "out.wav")
+    with open(text_file, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+    cmd = [sys.executable, helper,
+           "--text-file", text_file,
+           "--output", wav_tmp,
+           "--backend", spec["backend"],
+           "--exaggeration", str(exaggeration if exaggeration is not None
+                                 else CHATTERBOX_EXAGGERATION),
+           "--cfg-weight", str(cfg_weight if cfg_weight is not None
+                               else CHATTERBOX_CFG_WEIGHT),
+           "--language", language or CHATTERBOX_LANGUAGE]
+    if CHATTERBOX_MODEL:
+        cmd += ["--model", CHATTERBOX_MODEL]
+    if spec["ref_audio"]:
+        cmd += ["--audio-prompt", spec["ref_audio"]]
+
+    print(f"[VoiceGen] Chatterbox local TTS ({spec['backend']}, "
+          f"{'clone' if spec['ref_audio'] else 'default voice'}) — {len(text)} chars...")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1500)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Chatterbox synthesis timed out (25 min) — the model "
+                           "downloads from HuggingFace on first run.")
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "")[-600:]
+        raise RuntimeError(f"Chatterbox worker failed (exit {proc.returncode}): {tail}")
+    if not os.path.exists(wav_tmp) or os.path.getsize(wav_tmp) < 1024:
+        raise RuntimeError("Chatterbox produced no usable audio.")
+
+    if output_path.endswith(".mp3"):
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", wav_tmp, "-b:a", "192k", output_path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+    else:
+        import shutil as _sh
+        _sh.copyfile(wav_tmp, output_path)
+    try:
+        import shutil as _sh2
+        _sh2.rmtree(tmpdir, ignore_errors=True)
+    except Exception:
+        pass
+    if not os.path.exists(output_path) or os.path.getsize(output_path) < 1024:
+        raise RuntimeError("Chatterbox finished but the output file is missing/empty.")
+    print(f"[VoiceGen] Chatterbox saved -> {os.path.basename(output_path)}")
+    # No word-level timings from the worker; the orchestrator's
+    # transcribe_word_timings() runs faster-whisper on this file automatically.
+    return output_path, None
+
+
 # ── Fish Audio TTS (free s2.1-pro-free tier) ──────────────────────────────
 FISH_TTS_URL = "https://api.fish.audio/v1/tts"
 
@@ -449,7 +601,9 @@ def _generate_audio_kokoro(text: str, output_path: str, voice: str = "af_heart")
 
 
 def _resolve_tts_provider(voice: str, provider: str) -> str:
-    """Decide which TTS engine renders a request: kokoro | edge-tts | elevenlabs | fish | omnivoice.
+    """Decide which TTS engine renders a request.
+
+    Engines: kokoro | edge-tts | elevenlabs | fish | omnivoice | chatterbox.
 
     Edge neural voices (e.g. en-IN-PrabhatNeural) ALWAYS go to Edge-TTS —
     Kokoro can't render those voice IDs and would silently swap in af_heart,
@@ -463,6 +617,8 @@ def _resolve_tts_provider(voice: str, provider: str) -> str:
         return "fish"
     if v.startswith(("omni", "omnivoice")) or p == "omnivoice":
         return "omnivoice"
+    if v.startswith("chatterbox") or p == "chatterbox":
+        return "chatterbox"
     if v.startswith(("af_", "am_", "kokoro")):
         return "kokoro"
     if "neural" in v:
@@ -477,12 +633,15 @@ def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", 
     """
     Generates an audio file from the given text.
     Supports:
-      1. Kokoro-82M: Local, 100% free, ElevenLabs-quality neural voice synthesis with synced SRT.
-      2. Edge-TTS: Free, ultra-fast, unlimited Microsoft neural voices.
-      3. ElevenLabs: Premium voice cloning (requires ELEVENLABS_API_KEY).
-      4. Fish Audio: Free s2.1-pro-free tier (requires FISH_AUDIO_KEY); any
+      1. Chatterbox: Local, 100% free (resemble-ai/chatterbox, MIT) — human-grade
+         voice with zero-shot cloning, prosody controls (exaggeration/cfg_weight),
+         [laugh]/[chuckle] tags. PRIMARY for anti-slop narration.
+      2. Kokoro-82M: Local, 100% free, ElevenLabs-quality neural voice synthesis with synced SRT.
+      3. Edge-TTS: Free, ultra-fast, unlimited Microsoft neural voices.
+      4. ElevenLabs: Premium voice cloning (requires ELEVENLABS_API_KEY).
+      5. Fish Audio: Free s2.1-pro-free tier (requires FISH_AUDIO_KEY); any
          failure falls back to Edge-TTS automatically.
-      5. OmniVoice: Local, 100% free (k2-fsa/OmniVoice, Apache-2.0) — auto
+      6. OmniVoice: Local, 100% free (k2-fsa/OmniVoice, Apache-2.0) — auto
          voice, voice design ("omni:design:<instruct>") and zero-shot voice
          cloning ("omni:clone:<ref.wav>[|<ref_text>]"); any failure falls
          back to Edge-TTS automatically. Install: scripts/install_local.py.
@@ -497,6 +656,22 @@ def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", 
         output_path = os.path.join(OUTPUT_DIR, "audio.mp3")
     else:
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+    # A3 — normalize into spoken form BEFORE any engine speaks: "₹10L" ->
+    # "ten lakh rupees", "MBA" -> "M-B-A", no spoken asterisks. The
+    # <output>.spoken.txt sidecar records the exact words spoken so the
+    # assembler reconciles captions against the voice, never the raw script.
+    try:
+        from .tts_normalize import normalize_script_for_tts, spoken_sidecar_path
+        text = normalize_script_for_tts(text)
+        try:
+            _sp = spoken_sidecar_path(output_path)
+            with open(_sp, "w", encoding="utf-8") as _sf:
+                _sf.write(text)
+        except Exception:
+            pass
+    except Exception as _nz_err:
+        print(f"[VoiceGen] TTS normalize note: {_nz_err}")
 
     resolved = _resolve_tts_provider(voice, provider)
     eleven_key = api_key or os.environ.get("ELEVENLABS_API_KEY", "").strip()
@@ -541,6 +716,17 @@ def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", 
             print(f"[VoiceGen] OmniVoice failed ({oe}). Falling back to Edge-TTS...")
             resolved = "edge-tts"
 
+    # Chatterbox (local, free, MIT — the human-grade primary voice). The
+    # worker runs in a subprocess so the web app never imports torch; VRAM is
+    # released when it exits. ANY failure falls back to Edge-TTS so a render
+    # never dies on it.
+    if resolved == "chatterbox":
+        try:
+            return _generate_audio_chatterbox(text, output_path, voice=voice)
+        except Exception as ce:
+            print(f"[VoiceGen] Chatterbox failed ({ce}). Falling back to Edge-TTS...")
+            resolved = "edge-tts"
+
     # Primary recommendation: Kokoro-82M (ElevenLabs quality, 100% free local)
     is_kokoro = resolved == "kokoro"
     if is_kokoro:
@@ -550,7 +736,12 @@ def generate_audio(text: str, output_path: str = None, voice: str = "af_heart", 
             print(f"[VoiceGen] Kokoro-82M failed ({ke}). Gracefully falling back to Edge-TTS neural voice...")
 
     # Fallback / Default: Edge-TTS
-    fallback_voice = voice if not voice.lower().startswith(("elevenlabs", "af_", "am_", "kokoro")) else "en-IN-PrabhatNeural"
+    # Local voice labels must never leak into Edge's voice field — when the
+    # resolved provider fell back, pick a real neural voice instead.
+    _local_prefixes = ("elevenlabs", "af_", "am_", "kokoro", "omni", "omnivoice",
+                       "chatterbox", "fish")
+    fallback_voice = (voice if not voice.lower().startswith(_local_prefixes)
+                      else "en-IN-PrabhatNeural")
     print(f"[VoiceGen] Generating audio with Edge-TTS voice '{fallback_voice}' to {output_path}...")
     try:
         audio_p, vtt_p = asyncio.run(_generate_audio_async(text, output_path, fallback_voice))
