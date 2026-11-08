@@ -3117,6 +3117,70 @@ def api_agam_skills_delete(skill_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+# ── Media Jobs (Zero-Budget Image + Shorts Generator) ───────────────────────
+
+@app.route('/api/media/jobs', methods=['GET'])
+def api_media_jobs_list():
+    """List all media generation jobs."""
+    try:
+        from src.backend.background_media_service import MediaJobService
+        jobs = MediaJobService.list_jobs(limit=50)
+        return jsonify({"status": "success", "jobs": jobs, "count": len(jobs)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/media/jobs', methods=['POST'])
+def api_media_jobs_submit():
+    """Submit a new image+video generation job."""
+    try:
+        from src.backend.background_media_service import MediaJobService
+        payload = request.get_json() or {}
+        topic = payload.get('topic', '').strip()
+        if not topic:
+            return jsonify({"status": "error", "message": "topic is required"}), 400
+        uid = current_user.id if hasattr(current_user, 'is_authenticated') and current_user.is_authenticated else 1
+        job = MediaJobService.submit_job(
+            topic=topic,
+            script=payload.get('script', ''),
+            image_prompts=payload.get('image_prompts', []),
+            title=payload.get('title', topic),
+            tags=payload.get('tags', []),
+            dur_per_img=float(payload.get('dur_per_img', 5.0)),
+            auto_upload=bool(payload.get('auto_upload', False)),
+            privacy=payload.get('privacy', 'private'),
+            user_id=uid,
+        )
+        return jsonify({"status": "success", "job": job})
+    except Exception as e:
+        print(f"[Media Jobs Submit Error] {e}", flush=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/media/jobs/<job_id>', methods=['GET'])
+def api_media_job_status(job_id):
+    """Get status of a specific media job."""
+    try:
+        from src.backend.background_media_service import MediaJobService
+        job = MediaJobService.get_job(job_id)
+        if not job:
+            return jsonify({"status": "error", "message": "Job not found"}), 404
+        return jsonify({"status": "success", "job": job})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/media/jobs/<job_id>', methods=['DELETE'])
+def api_media_job_delete(job_id):
+    """Delete a media job from queue."""
+    try:
+        from src.backend.background_media_service import MediaJobService
+        removed = MediaJobService.delete_job(job_id)
+        return jsonify({"status": "success" if removed else "not_found"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 # ── Entrypoint ─────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     print("Starting PulseForge -- AI & Trend Intelligence Platform", flush=True)
@@ -3127,6 +3191,14 @@ if __name__ == '__main__':
         ensure_local_services()
     except Exception as _e:
         print(f"[Startup] Local services auto-start notice: {_e}", flush=True)
+
+    try:
+        from src.backend.background_media_service import MediaJobService
+        print("[Startup] Starting zero-budget media job service...", flush=True)
+        MediaJobService.start()
+        print("[Startup] Media Job Service (image+video daemon) running.", flush=True)
+    except Exception as _e:
+        print(f"[Startup] Media service notice: {_e}", flush=True)
 
     try:
         from src.backend.video_editing_learner import init_editing_db

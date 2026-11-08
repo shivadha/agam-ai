@@ -41,6 +41,8 @@ ENV/
 # Sub-repositories and temporary prompts
 signal/
 signal_prompt.txt
+edupulse/
+world_crisis_simulator/
 
 # Free-agent local-only secrets (auto-created accounts, signup config)
 data/agent_config.json
